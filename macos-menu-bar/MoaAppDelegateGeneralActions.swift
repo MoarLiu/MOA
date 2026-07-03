@@ -11,6 +11,92 @@ extension AppDelegate {
         controller.openCodex()
     }
 
+    @objc func checkUpdateAction() {
+        statusItemText.title = Self.statusTitle("Checking for updates...")
+
+        Task {
+            do {
+                let result = try await updateController.checkForUpdate()
+                await MainActor.run {
+                    switch result {
+                    case .upToDate(let version, let build):
+                        let buildText = build.map { " (\($0))" } ?? ""
+                        statusItemText.title = Self.statusTitle("Moa is up to date")
+                        MoaNonBlockingAlert.present(
+                            messageText: MoaL10n.text("Moa is up to date"),
+                            informativeText: MoaL10n.format("Latest release: %@.", "\(version)\(buildText)"),
+                            tone: .success
+                        )
+                    case .updateAvailable(let update):
+                        presentUpdatePrompt(update)
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    NSSound.beep()
+                    statusItemText.title = Self.statusTitle("Update check failed")
+                    showUpdateCheckError(error)
+                }
+            }
+        }
+    }
+
+    func showUpdateCheckError(_ error: Error) {
+        guard
+            let updateError = error as? MoaUpdateError,
+            updateError.isNetworkFailure
+        else {
+            showError(error.localizedDescription)
+            return
+        }
+
+        let choice = MoaNonBlockingAlert.choose(
+            messageText: MoaL10n.text("Update check failed"),
+            informativeText: error.localizedDescription,
+            primaryButtonTitle: MoaL10n.text("Open GitHub Releases"),
+            cancelButtonTitle: MoaL10n.text("OK"),
+            tone: .warning
+        )
+        if choice == .primary {
+            NSWorkspace.shared.open(MoaUpdateController.releasesURL)
+        }
+    }
+
+    func presentUpdatePrompt(_ update: MoaUpdateInfo) {
+        let buildText = update.build.map { " (\($0))" } ?? ""
+        let choice = MoaNonBlockingAlert.choose(
+            messageText: MoaL10n.text("Update Available"),
+            informativeText: MoaL10n.format("Moa %@ is available. Moa can download, verify, and install the update now.", "\(update.version)\(buildText)"),
+            primaryButtonTitle: MoaL10n.text("Download and Install"),
+            secondaryButtonTitle: MoaL10n.text("Open GitHub Releases"),
+            tone: .info
+        )
+
+        switch choice {
+        case .primary:
+            installUpdate(update)
+        case .secondary:
+            NSWorkspace.shared.open(update.releaseURL)
+        case .cancel:
+            statusItemText.title = Self.statusTitle("Update canceled")
+        }
+    }
+
+    func installUpdate(_ update: MoaUpdateInfo) {
+        statusItemText.title = Self.statusTitle("Downloading update...")
+        Task {
+            do {
+                try await updateController.downloadAndInstall(update)
+            } catch {
+                await MainActor.run {
+                    NSSound.beep()
+                    statusItemText.title = Self.statusTitle("Update failed")
+                    showError(error.localizedDescription)
+                }
+            }
+        }
+    }
+
     @objc func exportDataPackageAction() {
         guard confirmSensitiveDataPackageExport() else {
             return

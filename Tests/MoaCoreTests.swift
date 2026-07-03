@@ -51,6 +51,8 @@ private enum MoaCoreTests {
             ("official no-account mode deduplicates current login by email", testOfficialNoAccountDeduplicatesCurrentLoginByEmail),
             ("official account list syncs selected account email", testOfficialAccountListSyncsSelectedAccountEmail),
             ("LiteLLM preset no longer uses original Moa model name", testLiteLLMPresetName),
+            ("updater compares versions and parses release feed", testUpdaterVersionComparisonAndFeedParsing),
+            ("updater prunes old backups", testUpdaterBackupPruning),
             ("ZCode GLM pricing is estimated from usage tokens", testZCodePricing),
             ("ZCode usage scanner aggregates local SQLite usage", testZCodeUsageScanner)
         ]
@@ -774,6 +776,60 @@ private enum MoaCoreTests {
         try expect(summary.todayTokens == 1050, "ZCode summary should include today's tokens")
         try expect(summary.totalTokens == 1050, "ZCode summary should include total tokens")
         try expectClose(summary.cacheHitPercent, 19.047619, "ZCode summary should calculate cache hit percentage", tolerance: 0.00001)
+    }
+
+    private static func testUpdaterVersionComparisonAndFeedParsing() throws {
+        try expect(
+            MoaUpdateController.isRemoteVersion("1.1.5", remoteBuild: nil, newerThan: "1.1.4", localBuild: 111),
+            "newer patch version should be an update"
+        )
+        try expect(
+            MoaUpdateController.isRemoteVersion("1.1.5", remoteBuild: 113, newerThan: "1.1.5", localBuild: 112),
+            "newer build on the same version should be an update"
+        )
+        try expect(
+            !MoaUpdateController.isRemoteVersion("1.1.4", remoteBuild: 111, newerThan: "1.1.5", localBuild: 112),
+            "older remote version should not be an update"
+        )
+
+        let feed = """
+        <feed>
+          <entry>
+            <title>Moa 1.2.0</title>
+            <id>tag:github.com,2026:Release/v1.2.0 Build: 123</id>
+            <link rel="alternate" href="https://github.com/MoarLiu/Moa/releases/tag/v1.2.0"/>
+            <content>Moa-1.2.0-macos-arm64.dmg Moa-1.2.0-macos-x86_64.dmg Build: 123</content>
+          </entry>
+        </feed>
+        """
+        let update = try MoaUpdateController.releaseInfo(fromAtomFeed: feed)
+        try expect(update.version == "1.2.0", "Atom feed parser should extract release version")
+        try expect(update.build == 123, "Atom feed parser should extract build number")
+        try expect(update.releaseURL.absoluteString == "https://github.com/MoarLiu/Moa/releases/tag/v1.2.0", "Atom feed parser should preserve release URL")
+        try expect(update.dmgURL.lastPathComponent.hasPrefix("Moa-1.2.0-macos-"), "Atom feed parser should choose a Moa DMG asset")
+        try expect(update.checksumURL.lastPathComponent == update.dmgURL.lastPathComponent + ".sha256", "Atom feed parser should pair DMG checksum asset")
+    }
+
+    private static func testUpdaterBackupPruning() throws {
+        let root = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let backupRoot = root.appendingPathComponent("Update Backups", isDirectory: true)
+        try FileManager.default.createDirectory(at: backupRoot, withIntermediateDirectories: true)
+        let old = backupRoot.appendingPathComponent("Moa-1.1.0-previous-20260101-010101.app", isDirectory: true)
+        let middle = backupRoot.appendingPathComponent("Moa-1.1.1-previous-20260102-010101.app", isDirectory: true)
+        let newest = backupRoot.appendingPathComponent("Moa-1.1.2-previous-20260103-010101.app", isDirectory: true)
+        let invalid = backupRoot.appendingPathComponent("Moa-invalid.app", isDirectory: true)
+
+        for url in [old, middle, newest, invalid] {
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        }
+
+        try MoaUpdateController.pruneUpdateBackups(in: backupRoot, keeping: 2)
+        try expect(!FileManager.default.fileExists(atPath: old.path), "oldest valid update backup should be pruned")
+        try expect(FileManager.default.fileExists(atPath: middle.path), "second newest valid update backup should be kept")
+        try expect(FileManager.default.fileExists(atPath: newest.path), "newest valid update backup should be kept")
+        try expect(FileManager.default.fileExists(atPath: invalid.path), "invalid backup names should be ignored")
     }
 
     private static func runSQLite(db: URL, sql: String) throws {

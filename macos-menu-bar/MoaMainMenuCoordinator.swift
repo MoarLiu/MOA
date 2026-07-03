@@ -33,6 +33,11 @@ final class MoaMainMenuCoordinator {
         app.menu.addItem(app.moaDataItem)
         app.menu.addItem(NSMenuItem.separator())
 
+        let checkUpdateItem = NSMenuItem(title: MoaL10n.text("Check Update"), action: #selector(AppDelegate.checkUpdateAction), keyEquivalent: "")
+        checkUpdateItem.target = app
+        app.menu.addItem(checkUpdateItem)
+        app.menu.addItem(NSMenuItem.separator())
+
         app.menu.addItem(NSMenuItem(title: MoaL10n.text("Quit Moa"), action: #selector(AppDelegate.quitAction), keyEquivalent: "q"))
     }
 

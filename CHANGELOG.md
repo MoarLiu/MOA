@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.5 - 2026-07-03
+
+- Added a main-menu Check Update action backed by GitHub Releases.
+- The updater selects the matching `arm64` or `x86_64` macOS DMG, verifies the `.sha256` checksum, backs up the current app, and installs the update.
+
 ## 1.1.4 - 2026-07-03
 
 - Added a Codex history migration action that updates saved session `model_provider` values to the current `~/.codex/config.toml` provider.

@@ -2,7 +2,7 @@
 
 Moa is a focused macOS menu bar app for Codex Desktop, Claude Desktop, and local Provider Bridge workflows.
 
-It intentionally excludes the original Moa Companion surface: no desktop pet, AI quick actions, reminders, journal, Pomodoro, MCP helper, workflow runner, asset upload, updater, dashboard, skins, or sounds.
+It intentionally excludes the original Moa Companion surface: no desktop pet, AI quick actions, reminders, journal, Pomodoro, MCP helper, workflow runner, asset upload, dashboard, skins, or sounds.
 
 ## Features
 
@@ -11,6 +11,7 @@ It intentionally excludes the original Moa Companion surface: no desktop pet, AI
 - Claude Desktop profiles: write Claude Desktop 3P gateway profiles and copy Claude Code environment snippets.
 - Usage insights: local Codex and Claude usage summaries with configurable daily alerts.
 - Moa Data: export/import data packages, export redacted diagnostics, and optionally switch the active data root to iCloud Drive.
+- Updates: check GitHub Releases from the main menu, then download, verify, and install the matching macOS DMG.
 
 ## App Identity
 

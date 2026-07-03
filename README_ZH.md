@@ -2,7 +2,7 @@
 
 Moa 是一个专注于 Codex Desktop、Claude Desktop 和本地 Provider Bridge 工作流的 macOS 菜单栏应用。
 
-它不包含原 Moa 的 Companion 相关功能：没有桌面宠物、AI 快捷动作、提醒事项、日记、番茄钟、MCP helper、Workflow Runner、资产上传、自动更新、Dashboard、皮肤和声音资源包。
+它不包含原 Moa 的 Companion 相关功能：没有桌面宠物、AI 快捷动作、提醒事项、日记、番茄钟、MCP helper、Workflow Runner、资产上传、Dashboard、皮肤和声音资源包。
 
 ## 功能范围
 
@@ -11,6 +11,7 @@ Moa 是一个专注于 Codex Desktop、Claude Desktop 和本地 Provider Bridge 
 - Claude Desktop profile：写入 Claude Desktop 3P gateway profile，并复制 Claude Code 环境变量片段。
 - 用量统计：基于本地 Codex / Claude session 日志估算用量，并支持每日提醒阈值。
 - Moa 数据：导出/导入完整数据包、导出脱敏诊断包，并可把数据根切换到 iCloud Drive。
+- 更新检查：可从主菜单检查 GitHub Releases，下载、校验并安装匹配当前 Mac 的 DMG。
 
 ## App 身份
 

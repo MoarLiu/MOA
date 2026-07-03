@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let zcodeController = ZCodeController()
     lazy var usageCoordinator = MoaUsageCoordinator()
     let dataPackageController = MoaDataPackageController()
+    let updateController = MoaUpdateController()
     lazy var mainMenuCoordinator = MoaMainMenuCoordinator(app: self)
     lazy var providerActionCoordinator = MoaProviderActionCoordinator(app: self)
     lazy var profileActionCoordinator = MoaProfileActionCoordinator(app: self)
