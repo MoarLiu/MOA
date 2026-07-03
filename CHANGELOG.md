@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.4 - 2026-07-03
+
+- Added a Codex history migration action that updates saved session `model_provider` values to the current `~/.codex/config.toml` provider.
+- The migration checks for a current root `model_provider`, asks for confirmation, quits Codex before editing history state, and asks the user to restart Codex after completion.
+- Added backups and automatic rollback for Codex session JSONL and SQLite history indexes if migration fails.
+- Added regression coverage for missing provider config, JSONL/SQLite migration, non-standard JSONL skipping, and rollback on SQLite failure.
+
 ## 1.1.3 - 2026-06-26
 
 - Renamed the app, bundle, package, data roots, Provider Bridge identifiers, release artifacts, and documentation from Moa-Lite to Moa.

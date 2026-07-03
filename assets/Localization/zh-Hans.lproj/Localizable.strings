@@ -24,6 +24,7 @@
 "Add Provider" = "添加供应商";
 "Add Provider Bridge Config" = "添加 Provider Bridge 配置";
 "Add Responses Preset" = "添加 Responses 预设";
+"All historical session data has been updated to model_provider = \"%@\".\nPlease restart Codex." = "已经全部修改为 model_provider = \"%@\"。\n请重启 Codex。";
 "All Sources" = "全部来源";
 "API Base URL" = "API Base URL";
 "API Base URL is insecure: %@. Remote providers must use https://; only localhost, 127.0.0.1, and ::1 may use http://." = "API Base URL 不安全：%@。远程 provider 必须使用 https://；只有 localhost、127.0.0.1、::1 可使用 http://。";
@@ -36,6 +37,7 @@
 "Cache creation USD / 1M tokens" = "缓存创建 USD / 100万 tokens";
 "Cache read USD / 1M tokens" = "缓存读取 USD / 100万 tokens";
 "Cancel" = "取消";
+"Change all historical Codex session data to model_provider = \"%@\"?" = "是否修改所有历史会话数据为 model_provider = \"%@\"？";
 "Choose Codex, Claude Desktop, or ZCode to view its daily usage alert threshold." = "选择 Codex、Claude Desktop 或 ZCode 后查看对应的今日用量提醒阈值。";
 "Choose Codex or Claude Desktop to view its daily usage alert threshold." = "选择 Codex 或 Claude Desktop 后查看对应的今日用量提醒阈值。";
 "Claude Code config copied" = "Claude Code 配置已复制";
@@ -49,6 +51,8 @@
 "Close Window" = "关闭窗口";
 "Codex" = "Codex";
 "Codex config copied" = "Codex 配置已复制";
+"Codex History Migrated" = "Codex 历史会话已迁移";
+"Codex history migrated" = "Codex 历史会话已迁移";
 "Codex Official" = "Codex 官方模式";
 "Codex official account not found." = "找不到 Codex 官方账号。";
 "Config Name" = "配置名称";
@@ -106,6 +110,7 @@
 "Export Provider" = "导出供应商";
 "Export Usage Report" = "导出用量报告";
 "Fallback" = "回退";
+"Failed to update Codex SQLite history index: %@" = "更新 Codex SQLite 历史索引失败：%@";
 "Fallback Models" = "回退模型";
 "Fallback Pricing Models" = "回退计价模型";
 "Fast Mode" = "快速模式";
@@ -139,6 +144,13 @@
 "Moa Data Stored in iCloud" = "Moa 数据已存储到 iCloud";
 "Moa will copy iCloud Drive/Moa back to ~/.moa, then use the local folder as its data folder." = "Moa 会把 iCloud Drive/Moa 复制回 ~/.moa，然后使用本地文件夹作为数据目录。";
 "Moa will update the selected Provider Bridge config and restart the local bridge. Any old bridge curl command will stop working." = "Moa 会更新选中的 Provider Bridge 配置并重启本地桥。旧的 bridge curl 命令会失效。";
+"Migrate" = "迁移";
+"Migrate Codex History?" = "迁移 Codex 历史会话？";
+"Migrate History model_provider" = "迁移历史会话 model_provider";
+"Migrating Codex history..." = "正在迁移 Codex 历史会话...";
+"Migration failed and automatic rollback failed.\nReason: %@\nBackup: %@\nRollback error: %@" = "迁移失败，且自动回滚失败。\n原因：%@\n备份：%@\n回滚错误：%@";
+"Migration failed and the previous Codex history was restored.\nReason: %@\nBackup: %@" = "迁移失败，已恢复原来的 Codex 历史会话。\n原因：%@\n备份：%@";
+"Migration failed" = "迁移失败";
 "Model" = "模型";
 "Model: %@\nEndpoint: %@" = "模型：%@\n端点：%@";
 "Models (optional)" = "模型（可选）";
@@ -219,6 +231,7 @@
 "Test Connection" = "测试连接";
 "Testing connection with %@%@..." = "正在使用 %@ 测试连接%@...";
 "The connection test did not receive a valid response." = "连接测试没有收到有效响应。";
+"The current model_provider field is missing. Migration failed." = "当前 model_provider 字段缺失，迁移失败。";
 "The curl command uses a redacted <bridge-token> placeholder." = "curl 命令使用已脱敏的 <bridge-token> 占位符。";
 "The current Codex official login is already saved as \"%@\"." = "当前 Codex 官方登录已保存为「%@」。";
 "The iCloud Moa data path already exists but is not a folder: %@" = "iCloud Moa 数据路径已存在，但不是文件夹：%@";

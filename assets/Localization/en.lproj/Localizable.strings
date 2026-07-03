@@ -24,6 +24,7 @@
 "Add Provider" = "Add Provider";
 "Add Provider Bridge Config" = "Add Provider Bridge Config";
 "Add Responses Preset" = "Add Responses Preset";
+"All historical session data has been updated to model_provider = \"%@\".\nPlease restart Codex." = "All historical session data has been updated to model_provider = \"%@\".\nPlease restart Codex.";
 "All Sources" = "All Sources";
 "API Base URL" = "API Base URL";
 "API Base URL is insecure: %@. Remote providers must use https://; only localhost, 127.0.0.1, and ::1 may use http://." = "API Base URL is insecure: %@. Remote providers must use https://; only localhost, 127.0.0.1, and ::1 may use http://.";
@@ -36,6 +37,7 @@
 "Cache creation USD / 1M tokens" = "Cache creation USD / 1M tokens";
 "Cache read USD / 1M tokens" = "Cache read USD / 1M tokens";
 "Cancel" = "Cancel";
+"Change all historical Codex session data to model_provider = \"%@\"?" = "Change all historical Codex session data to model_provider = \"%@\"?";
 "Choose Codex, Claude Desktop, or ZCode to view its daily usage alert threshold." = "Choose Codex, Claude Desktop, or ZCode to view its daily usage alert threshold.";
 "Choose Codex or Claude Desktop to view its daily usage alert threshold." = "Choose Codex or Claude Desktop to view its daily usage alert threshold.";
 "Claude Code config copied" = "Claude Code config copied";
@@ -49,6 +51,8 @@
 "Close Window" = "Close Window";
 "Codex" = "Codex";
 "Codex config copied" = "Codex config copied";
+"Codex History Migrated" = "Codex History Migrated";
+"Codex history migrated" = "Codex history migrated";
 "Codex Official" = "Codex Official";
 "Codex official account not found." = "Codex official account not found.";
 "Config Name" = "Config Name";
@@ -106,6 +110,7 @@
 "Export Provider" = "Export Provider";
 "Export Usage Report" = "Export Usage Report";
 "Fallback" = "Fallback";
+"Failed to update Codex SQLite history index: %@" = "Failed to update Codex SQLite history index: %@";
 "Fallback Models" = "Fallback Models";
 "Fallback Pricing Models" = "Fallback Pricing Models";
 "Fast Mode" = "Fast Mode";
@@ -139,6 +144,13 @@
 "Moa Data Stored in iCloud" = "Moa Data Stored in iCloud";
 "Moa will copy iCloud Drive/Moa back to ~/.moa, then use the local folder as its data folder." = "Moa will copy iCloud Drive/Moa back to ~/.moa, then use the local folder as its data folder.";
 "Moa will update the selected Provider Bridge config and restart the local bridge. Any old bridge curl command will stop working." = "Moa will update the selected Provider Bridge config and restart the local bridge. Any old bridge curl command will stop working.";
+"Migrate" = "Migrate";
+"Migrate Codex History?" = "Migrate Codex History?";
+"Migrate History model_provider" = "Migrate History model_provider";
+"Migrating Codex history..." = "Migrating Codex history...";
+"Migration failed and automatic rollback failed.\nReason: %@\nBackup: %@\nRollback error: %@" = "Migration failed and automatic rollback failed.\nReason: %@\nBackup: %@\nRollback error: %@";
+"Migration failed and the previous Codex history was restored.\nReason: %@\nBackup: %@" = "Migration failed and the previous Codex history was restored.\nReason: %@\nBackup: %@";
+"Migration failed" = "Migration failed";
 "Model" = "Model";
 "Model: %@\nEndpoint: %@" = "Model: %@\nEndpoint: %@";
 "Models (optional)" = "Models (optional)";
@@ -219,6 +231,7 @@
 "Test Connection" = "Test Connection";
 "Testing connection with %@%@..." = "Testing connection with %@%@...";
 "The connection test did not receive a valid response." = "The connection test did not receive a valid response.";
+"The current model_provider field is missing. Migration failed." = "The current model_provider field is missing. Migration failed.";
 "The curl command uses a redacted <bridge-token> placeholder." = "The curl command uses a redacted <bridge-token> placeholder.";
 "The current Codex official login is already saved as \"%@\"." = "The current Codex official login is already saved as \"%@\".";
 "The iCloud Moa data path already exists but is not a folder: %@" = "The iCloud Moa data path already exists but is not a folder: %@";

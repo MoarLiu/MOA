@@ -205,6 +205,58 @@ final class MoaProfileActionCoordinator {
         usageInsightsWindow.show(initialSource: .codex)
     }
 
+    func migrateCodexSessionModelProviderAction() {
+        let providerID: String
+        do {
+            providerID = try profileController.currentCodexRootModelProvider()
+        } catch {
+            NSSound.beep()
+            statusItemText.title = AppDelegate.statusTitle("Migration failed")
+            MoaNonBlockingAlert.present(
+                messageText: MoaL10n.text("Migration failed"),
+                informativeText: MoaL10n.text("The current model_provider field is missing. Migration failed."),
+                tone: .warning
+            )
+            return
+        }
+
+        guard MoaNonBlockingAlert.confirm(
+            messageText: MoaL10n.text("Migrate Codex History?"),
+            informativeText: MoaL10n.format("Change all historical Codex session data to model_provider = \"%@\"?", providerID),
+            primaryButtonTitle: MoaL10n.text("Migrate"),
+            tone: .warning
+        ) else {
+            return
+        }
+
+        statusItemText.title = AppDelegate.statusTitle("Migrating Codex history...")
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = Result {
+                self.controller.quitCodex()
+                return try self.profileController.migrateCodexSessionModelProvider(to: providerID)
+            }
+
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let migration):
+                    self.statusItemText.title = AppDelegate.statusTitle("Codex history migrated")
+                    MoaNonBlockingAlert.present(
+                        messageText: MoaL10n.text("Codex History Migrated"),
+                        informativeText: MoaL10n.format(
+                            "All historical session data has been updated to model_provider = \"%@\".\nPlease restart Codex.",
+                            migration.providerID
+                        ),
+                        tone: .success
+                    )
+                case .failure(let error):
+                    NSSound.beep()
+                    self.statusItemText.title = AppDelegate.statusTitle("Migration failed")
+                    self.showError(error.localizedDescription)
+                }
+            }
+        }
+    }
+
     func addClaudeDesktopProviderAction() {
         guard let input = showAddClaudeDesktopProviderPanel() else {
             return

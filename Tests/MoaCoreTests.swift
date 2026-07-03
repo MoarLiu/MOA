@@ -41,6 +41,9 @@ private enum MoaCoreTests {
             ("Codex bridge provider IDs use Moa prefix", testCodexBridgeProviderIDs),
             ("official restore keeps selected provider identity", testOfficialRestoreKeepsSelectedProviderIdentity),
             ("official restore strips selected direct provider credentials", testOfficialRestoreStripsSelectedDirectProviderCredentials),
+            ("Codex session provider migration requires current provider", testCodexSessionProviderMigrationRequiresCurrentProvider),
+            ("Codex session provider migration updates JSONL and SQLite", testCodexSessionProviderMigrationUpdatesJSONLAndSQLite),
+            ("Codex session provider migration rolls back on failure", testCodexSessionProviderMigrationRollsBackOnFailure),
             ("official account displays email from auth token", testOfficialAccountDisplaysEmailFromAuthToken),
             ("official no-account mode preserves third-party config without login", testOfficialNoAccountPreservesThirdPartyConfigWithoutLogin),
             ("official no-account mode captures current login without selecting it", testOfficialNoAccountCapturesCurrentLoginWithoutSelectingIt),
@@ -238,6 +241,148 @@ private enum MoaCoreTests {
         try expect(!restored.contains("sk-test"), "official restore should remove the selected provider token")
         try expect(restored.contains("https://backup.example.com"), "official restore should leave unselected custom providers alone")
         try expect(restored.contains("backup-token"), "official restore should not alter unselected custom provider tokens")
+    }
+
+    private static func testCodexSessionProviderMigrationRequiresCurrentProvider() throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let codexHome = home.appendingPathComponent(".codex", isDirectory: true)
+        try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+        try """
+        model = "gpt-test"
+
+        [model_providers.one]
+        name = "one"
+        """.write(to: codexHome.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
+
+        let controller = ConfigProfileController(environment: [
+            "HOME": home.path,
+            "CODEX_HOME": codexHome.path
+        ])
+
+        do {
+            _ = try controller.currentCodexRootModelProvider()
+            throw TestError.failure("missing root model_provider should fail")
+        } catch CodexSessionProviderMigrationError.missingModelProvider {
+            return
+        }
+    }
+
+    private static func testCodexSessionProviderMigrationUpdatesJSONLAndSQLite() throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let fileManager = FileManager.default
+        let codexHome = home.appendingPathComponent(".codex", isDirectory: true)
+        let sessions = codexHome.appendingPathComponent("sessions/2026/06/29", isDirectory: true)
+        let archivedSessions = codexHome.appendingPathComponent("archived_sessions/2026/06/28", isDirectory: true)
+        let nestedSQLite = codexHome.appendingPathComponent("sqlite", isDirectory: true)
+        try fileManager.createDirectory(at: sessions, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: archivedSessions, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: nestedSQLite, withIntermediateDirectories: true)
+        try thirdPartyConfig.write(to: codexHome.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
+
+        let activeJSONL = sessions.appendingPathComponent("rollout-active.jsonl")
+        try """
+        {"timestamp":"2026-06-29T00:00:00Z","payload":{"model_provider":"codex_local_access","id":"active"}}
+        {"type":"message","payload":{"text":"keep codex_local_access in body text"}}
+        """.write(to: activeJSONL, atomically: true, encoding: .utf8)
+
+        let archivedJSONL = archivedSessions.appendingPathComponent("rollout-archived.jsonl")
+        try """
+        {"timestamp":"2026-06-28T00:00:00Z","payload":{"model_provider":"openai","id":"archived"}}
+        """.write(to: archivedJSONL, atomically: true, encoding: .utf8)
+
+        let unchangedJSONL = sessions.appendingPathComponent("rollout-current.jsonl")
+        try """
+        {"timestamp":"2026-06-29T01:00:00Z","payload":{"model_provider":"one","id":"current"}}
+        """.write(to: unchangedJSONL, atomically: true, encoding: .utf8)
+
+        let missingPayloadJSONL = sessions.appendingPathComponent("rollout-missing-payload.jsonl")
+        let missingPayloadText = """
+        {"timestamp":"2026-06-29T02:00:00Z","id":"missing-payload"}
+        """
+        try missingPayloadText.write(to: missingPayloadJSONL, atomically: true, encoding: .utf8)
+
+        let missingProviderJSONL = sessions.appendingPathComponent("rollout-missing-provider.jsonl")
+        let missingProviderText = """
+        {"timestamp":"2026-06-29T03:00:00Z","payload":{"id":"missing-provider"}}
+        """
+        try missingProviderText.write(to: missingProviderJSONL, atomically: true, encoding: .utf8)
+
+        let mainDB = codexHome.appendingPathComponent("state_5.sqlite")
+        let nestedDB = nestedSQLite.appendingPathComponent("state_5.sqlite")
+        try createSessionProviderTestDatabase(at: mainDB, providers: ["codex_local_access", "openai", "one"])
+        try createSessionProviderTestDatabase(at: nestedDB, providers: ["openai", "one"])
+
+        let controller = ConfigProfileController(environment: [
+            "HOME": home.path,
+            "CODEX_HOME": codexHome.path
+        ])
+        let result = try controller.migrateCodexSessionModelProviderToCurrentConfig()
+
+        try expect(result.providerID == "one", "migration should use current root model_provider")
+        try expect(result.jsonlFilesUpdated == 2, "migration should update only JSONL files with non-current providers")
+        try expect(result.sqliteRowsUpdated == 3, "migration should update non-current SQLite rows in both indexes")
+        try expect(fileManager.fileExists(atPath: result.backupURL.path), "migration should create a rollback backup")
+        let activeProvider = try firstJSONLPayloadProvider(in: activeJSONL)
+        let archivedProvider = try firstJSONLPayloadProvider(in: archivedJSONL)
+        let unchangedProvider = try firstJSONLPayloadProvider(in: unchangedJSONL)
+        try expect(activeProvider == "one", "active JSONL payload provider should be updated")
+        try expect(archivedProvider == "one", "archived JSONL payload provider should be updated")
+        try expect(unchangedProvider == "one", "current JSONL provider should remain one")
+        let activeText = try String(contentsOf: activeJSONL, encoding: .utf8)
+        try expect(activeText.contains("keep codex_local_access in body text"), "migration should not rewrite JSONL body text")
+        let missingPayloadAfterMigration = try String(contentsOf: missingPayloadJSONL, encoding: .utf8)
+        let missingProviderAfterMigration = try String(contentsOf: missingProviderJSONL, encoding: .utf8)
+        try expect(missingPayloadAfterMigration == missingPayloadText, "migration should not add payloads to non-session metadata")
+        try expect(missingProviderAfterMigration == missingProviderText, "migration should not add missing model_provider fields")
+        let mainCounts = try sqliteProviderCounts(in: mainDB)
+        let nestedCounts = try sqliteProviderCounts(in: nestedDB)
+        try expect(mainCounts == ["one": 3], "main SQLite index should only contain one")
+        try expect(nestedCounts == ["one": 2], "nested SQLite index should only contain one")
+    }
+
+    private static func testCodexSessionProviderMigrationRollsBackOnFailure() throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let fileManager = FileManager.default
+        let codexHome = home.appendingPathComponent(".codex", isDirectory: true)
+        let sessions = codexHome.appendingPathComponent("sessions/2026/06/29", isDirectory: true)
+        try fileManager.createDirectory(at: sessions, withIntermediateDirectories: true)
+        try thirdPartyConfig.write(to: codexHome.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
+
+        let activeJSONL = sessions.appendingPathComponent("rollout-active.jsonl")
+        try """
+        {"timestamp":"2026-06-29T00:00:00Z","payload":{"model_provider":"openai","id":"active"}}
+        """.write(to: activeJSONL, atomically: true, encoding: .utf8)
+
+        let malformedDB = codexHome.appendingPathComponent("state_5.sqlite")
+        try "not a sqlite database".write(to: malformedDB, atomically: true, encoding: .utf8)
+
+        let controller = ConfigProfileController(environment: [
+            "HOME": home.path,
+            "CODEX_HOME": codexHome.path
+        ])
+
+        do {
+            _ = try controller.migrateCodexSessionModelProviderToCurrentConfig()
+            throw TestError.failure("migration should fail when SQLite index is unreadable")
+        } catch let error as CodexSessionProviderMigrationError {
+            switch error {
+            case .migrationFailedAndRestored(_, _):
+                break
+            default:
+                throw TestError.failure("expected restored migration failure, got \(error.localizedDescription)")
+            }
+        }
+
+        let restoredProvider = try firstJSONLPayloadProvider(in: activeJSONL)
+        let restoredDB = try String(contentsOf: malformedDB, encoding: .utf8)
+        try expect(restoredProvider == "openai", "failed migration should restore JSONL changes")
+        try expect(restoredDB == "not a sqlite database", "failed migration should restore SQLite files")
     }
 
     private static func testOfficialAccountDisplaysEmailFromAuthToken() throws {
@@ -466,6 +611,66 @@ private enum MoaCoreTests {
           "last_refresh": "2026-06-26T00:00:00Z"
         }
         """
+    }
+
+    private static func firstJSONLPayloadProvider(in fileURL: URL) throws -> String? {
+        let text = try String(contentsOf: fileURL, encoding: .utf8)
+        guard let firstLine = text.components(separatedBy: "\n").first,
+              let data = firstLine.data(using: .utf8),
+              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let payload = object["payload"] as? [String: Any]
+        else {
+            return nil
+        }
+        return payload["model_provider"] as? String
+    }
+
+    private static func createSessionProviderTestDatabase(at url: URL, providers: [String]) throws {
+        let values = providers.enumerated().map { index, provider in
+            "('thread-\(index)', '\(provider)', 0)"
+        }.joined(separator: ",")
+        _ = try runSQLite(
+            url,
+            """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                model_provider TEXT NOT NULL,
+                archived INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO threads (id, model_provider, archived) VALUES \(values);
+            """
+        )
+    }
+
+    private static func sqliteProviderCounts(in url: URL) throws -> [String: Int] {
+        let output = try runSQLite(url, "SELECT model_provider, COUNT(*) FROM threads GROUP BY model_provider ORDER BY model_provider;")
+        var counts: [String: Int] = [:]
+        for line in output.components(separatedBy: "\n") where !line.isEmpty {
+            let parts = line.components(separatedBy: "|")
+            guard parts.count == 2, let count = Int(parts[1]) else { continue }
+            counts[parts[0]] = count
+        }
+        return counts
+    }
+
+    private static func runSQLite(_ url: URL, _ sql: String) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        process.arguments = [url.path, sql]
+
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = errorPipe
+        try process.run()
+        process.waitUntilExit()
+
+        let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let errorOutput = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        guard process.terminationStatus == 0 else {
+            throw TestError.failure("sqlite3 failed: \(errorOutput)")
+        }
+        return output
     }
 
     private static let thirdPartyConfig = """

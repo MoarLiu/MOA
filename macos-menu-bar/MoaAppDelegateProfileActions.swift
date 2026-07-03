@@ -11,6 +11,7 @@ extension AppDelegate {
     @objc func exportCodexProfilesAction() { profileActionCoordinator.exportCodexProfilesAction() }
     @objc func showCodexDailyUsageAlertAction() { profileActionCoordinator.showCodexDailyUsageAlertAction() }
     @objc func showCodexUsageDetailsAction() { profileActionCoordinator.showCodexUsageDetailsAction() }
+    @objc func migrateCodexSessionModelProviderAction() { profileActionCoordinator.migrateCodexSessionModelProviderAction() }
     @objc func addClaudeDesktopProviderAction() { profileActionCoordinator.addClaudeDesktopProviderAction() }
     @objc func editClaudeDesktopProviderAction(_ sender: NSMenuItem) { profileActionCoordinator.editClaudeDesktopProviderAction(sender) }
     @objc func deleteClaudeDesktopProviderAction(_ sender: NSMenuItem) { profileActionCoordinator.deleteClaudeDesktopProviderAction(sender) }

@@ -267,6 +267,9 @@ final class MoaMainMenuCoordinator {
 
         app.codexProfilesMenu.addItem(NSMenuItem(title: MoaL10n.text("Open Codex"), action: #selector(AppDelegate.openCodexAction), keyEquivalent: ""))
         app.codexProfilesMenu.addItem(NSMenuItem(title: MoaL10n.text("Reopen Codex"), action: #selector(AppDelegate.reopenCodexAction), keyEquivalent: ""))
+        let migrateHistoryProviderItem = NSMenuItem(title: MoaL10n.text("Migrate History model_provider"), action: #selector(AppDelegate.migrateCodexSessionModelProviderAction), keyEquivalent: "")
+        migrateHistoryProviderItem.target = app
+        app.codexProfilesMenu.addItem(migrateHistoryProviderItem)
         app.codexProfilesMenu.addItem(NSMenuItem.separator())
         app.codexProfilesMenu.addItem(NSMenuItem(title: MoaL10n.text("Open Moa Folder"), action: #selector(AppDelegate.openMoaFolderAction), keyEquivalent: ""))
         app.codexProfilesMenu.addItem(NSMenuItem(title: MoaL10n.text("Open Codex Folder"), action: #selector(AppDelegate.openCodexFolderAction), keyEquivalent: ""))

@@ -97,6 +97,10 @@ final class FastStateController {
         openCodexIfAvailable()
     }
 
+    func quitCodex() {
+        quitCodexIfNeeded()
+    }
+
     func openCodex() {
         openCodexIfAvailable()
     }
