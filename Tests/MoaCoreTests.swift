@@ -53,6 +53,9 @@ private enum MoaCoreTests {
             ("LiteLLM preset no longer uses original Moa model name", testLiteLLMPresetName),
             ("updater compares versions and parses release feed", testUpdaterVersionComparisonAndFeedParsing),
             ("updater prunes old backups", testUpdaterBackupPruning),
+            ("GPT-5.6 family uses current local pricing", testGPT56Pricing),
+            ("remote pricing catalog parses, merges, and overrides fallback", testRemotePricingCatalog),
+            ("pricing updater schedules the daily local check", testPricingUpdateSchedule),
             ("ZCode GLM pricing is estimated from usage tokens", testZCodePricing),
             ("ZCode usage scanner aggregates local SQLite usage", testZCodeUsageScanner)
         ]
@@ -699,6 +702,175 @@ private enum MoaCoreTests {
         try expect(preset?.model == "moa-codex", "LiteLLM sample model should be Moa scoped")
         try expect(preset?.models == ["moa-codex"], "LiteLLM sample models should be Moa scoped")
     }
+
+    private static func testGPT56Pricing() throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        MoaUsagePricing.useRemoteCatalogStoreForTesting(
+            MoaUsagePricingCatalogStore(environment: ["HOME": home.path])
+        )
+        defer { MoaUsagePricing.resetRemoteCatalogStoreForTesting() }
+
+        let standardCases: [(model: String, expected: Double)] = [
+            ("gpt-5.6", 3.775),
+            ("gpt-5.6-sol", 3.775),
+            ("openai/gpt-5.6-terra", 1.8875),
+            ("gpt-5.6-luna-2026-07-09", 0.755)
+        ]
+        for item in standardCases {
+            let estimate = MoaUsagePricing.codexCostEstimate(
+                model: item.model,
+                inputTokens: 200_000,
+                cachedInputTokens: 50_000,
+                outputTokens: 100_000
+            )
+            try expect(estimate?.usesFallbackPricing == false, "\(item.model) should use its own GPT-5.6 price")
+            try expectClose(estimate?.costUSD ?? -1, item.expected, "\(item.model) should use current standard pricing")
+        }
+
+        let longContextCases: [(model: String, expected: Double)] = [
+            ("gpt-5.6-sol", 6.6),
+            ("gpt-5.6-terra", 3.3),
+            ("gpt-5.6-luna", 1.32)
+        ]
+        for item in longContextCases {
+            let cost = MoaUsagePricing.codexCostUSD(
+                model: item.model,
+                inputTokens: 300_000,
+                cachedInputTokens: 100_000,
+                outputTokens: 100_000
+            )
+            try expectClose(cost ?? -1, item.expected, "\(item.model) should use current long-context pricing")
+        }
+
+        let priorityCases: [(model: String, expected: Double)] = [
+            ("gpt-5.6", 7.55),
+            ("gpt-5.6-sol", 7.55),
+            ("gpt-5.6-terra", 3.775),
+            ("gpt-5.6-luna", 1.51)
+        ]
+        for item in priorityCases {
+            let cost = MoaUsagePricing.codexPriorityCostUSD(
+                model: item.model,
+                inputTokens: 200_000,
+                cachedInputTokens: 50_000,
+                outputTokens: 100_000
+            )
+            try expectClose(cost ?? -1, item.expected, "\(item.model) should use current priority pricing")
+        }
+    }
+
+    private static func testRemotePricingCatalog() throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let sourceURL = URL(string: "https://models.dev/api.json")!
+        let fetchedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let data = Data(remotePricingFixture.utf8)
+        var snapshot = try MoaUsagePricingRemoteParser.parse(
+            data: data,
+            sourceURL: sourceURL,
+            fetchedAt: fetchedAt
+        )
+        let parsed = snapshot.models[MoaUsageSource.codex.rawValue]?["gpt-5.7"]
+        try expect(parsed?.thresholdTokens == 272_000, "remote context tier should preserve its threshold")
+        try expectClose(parsed?.inputUSDPerMillionAboveThreshold ?? -1, 4, "remote context tier should preserve input pricing")
+
+        let store = MoaUsagePricingCatalogStore(environment: ["HOME": home.path])
+        let firstUpdate = try store.merge(snapshot)
+        guard case .updated(let firstAdded, let firstChanged) = firstUpdate else {
+            throw TestError.failure("first remote catalog should create a local snapshot")
+        }
+        try expect(firstAdded == 9, "first remote catalog should add every valid fixture model")
+        try expect(firstChanged == 0, "first remote catalog should not report changed models")
+        let identicalUpdate = try store.merge(snapshot)
+        try expect(identicalUpdate == .unchanged, "identical remote catalogs should not rewrite the local snapshot")
+
+        MoaUsagePricing.useRemoteCatalogStoreForTesting(store)
+        defer { MoaUsagePricing.resetRemoteCatalogStoreForTesting() }
+        let estimate = MoaUsagePricing.codexCostEstimate(
+            model: "openai/gpt-5.7",
+            inputTokens: 200_000,
+            cachedInputTokens: 50_000,
+            outputTokens: 100_000
+        )
+        try expect(estimate?.usesFallbackPricing == false, "remote-only models should not use fallback pricing")
+        try expectClose(estimate?.costUSD ?? -1, 1.31, "remote-only models should use downloaded pricing")
+
+        snapshot.models[MoaUsageSource.codex.rawValue]?["gpt-5.7"]?.inputUSDPerMillion = 3
+        snapshot.models[MoaUsageSource.codex.rawValue]?["gpt-5.8"] = parsed
+        let secondUpdate = try store.merge(snapshot)
+        try expect(secondUpdate == .updated(added: 1, changed: 1), "catalog merge should distinguish additions from field changes")
+
+        var sparse = snapshot
+        sparse.models[MoaUsageSource.codex.rawValue]?["gpt-5.7"]?.cacheReadUSDPerMillion = nil
+        let sparseUpdate = try store.merge(sparse)
+        try expect(sparseUpdate == .unchanged, "missing remote fields should not erase the local incremental catalog")
+        try expectClose(
+            store.pricing(source: .codex, model: "gpt-5.7")?.cacheReadUSDPerMillion ?? -1,
+            0.2,
+            "existing optional prices should survive sparse remote responses"
+        )
+
+        var partial = snapshot
+        partial.models[MoaUsageSource.codex.rawValue]?.removeValue(forKey: "gpt-5.7")
+        _ = try store.merge(partial)
+        try expect(store.pricing(source: .codex, model: "gpt-5.7") != nil, "incremental refresh should retain models omitted by a later response")
+
+        try store.recordSuccessfulCheck(at: fetchedAt)
+        try expect(store.lastSuccessfulCheck() == fetchedAt, "successful checks should be recorded separately from catalog changes")
+    }
+
+    private static func testPricingUpdateSchedule() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let before = calendar.date(from: DateComponents(year: 2026, month: 7, day: 10, hour: 0, minute: 20, second: 0))!
+        let scheduled = calendar.date(from: DateComponents(year: 2026, month: 7, day: 10, hour: 0, minute: 20, second: 1))!
+        let after = calendar.date(from: DateComponents(year: 2026, month: 7, day: 10, hour: 8))!
+
+        try expect(
+            MoaUsagePricingUpdateCoordinator.nextScheduledDate(after: before, calendar: calendar) == scheduled,
+            "next pricing check should be scheduled at 00:20:01 local time"
+        )
+        try expect(
+            !MoaUsagePricingUpdateCoordinator.shouldCheck(now: before, lastSuccessfulCheck: nil, calendar: calendar),
+            "launches before the daily check time should wait for the timer"
+        )
+        try expect(
+            MoaUsagePricingUpdateCoordinator.shouldCheck(now: after, lastSuccessfulCheck: nil, calendar: calendar),
+            "launches after the daily check time should catch up"
+        )
+        try expect(
+            !MoaUsagePricingUpdateCoordinator.shouldCheck(now: after, lastSuccessfulCheck: scheduled, calendar: calendar),
+            "a successful check on the same local day should not repeat"
+        )
+    }
+
+    private static let remotePricingFixture = #"""
+    {
+      "openai": {
+        "models": {
+          "gpt-5.3": {"cost":{"input":1,"output":5,"cache_read":0.1}},
+          "gpt-5.4": {"cost":{"input":1,"output":5,"cache_read":0.1}},
+          "gpt-5.5": {"cost":{"input":1,"output":5,"cache_read":0.1}},
+          "gpt-5.6": {"cost":{"input":1,"output":5,"cache_read":0.1}},
+          "gpt-5.7": {"cost":{"input":2,"output":10,"cache_read":0.2,"cache_write":2.5,"tiers":[{"input":4,"output":15,"cache_read":0.4,"cache_write":5,"tier":{"type":"context","size":272000}}]}}
+        }
+      },
+      "anthropic": {
+        "models": {
+          "claude-haiku": {"cost":{"input":1,"output":5,"cache_read":0.1,"cache_write":1.25}},
+          "claude-sonnet": {"cost":{"input":3,"output":15,"cache_read":0.3,"cache_write":3.75}},
+          "claude-opus": {"cost":{"input":5,"output":25,"cache_read":0.5,"cache_write":6.25}}
+        }
+      },
+      "zai": {
+        "models": {
+          "glm-5.2": {"cost":{"input":1.4,"output":4.4,"cache_read":0.26,"cache_write":0}}
+        }
+      }
+    }
+    """#
 
     private static func testZCodePricing() throws {
         let estimate = MoaUsagePricing.zcodeCostEstimate(

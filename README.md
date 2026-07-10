@@ -42,7 +42,11 @@ Moa stores its local profile and recovery data under:
 - `~/.moa/provider_bridge_profiles.json`
 - `~/.moa/claude_desktop_profiles.json`
 - `~/.moa/usage-pricing-overrides.json`
+- `~/.moa/usage-pricing-catalog-v1.json`
 - `~/.moa/backups`
+- `~/Library/Application Support/Moa/usage-pricing-update-state.json`
+
+Moa checks `https://models.dev/api.json` every day at 00:20:01 local time. If the app was not running then, it catches up on the next launch after that time. Validated additions and field changes are merged into the local catalog; custom prices remain highest priority, and the built-in table remains available when the network or remote catalog is unavailable.
 
 When iCloud storage is enabled, Moa reads and writes `iCloud Drive/Moa` directly instead of `~/.moa`.
 

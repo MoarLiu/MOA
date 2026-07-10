@@ -42,7 +42,11 @@ Moa 的本地数据存放在：
 - `~/.moa/provider_bridge_profiles.json`
 - `~/.moa/claude_desktop_profiles.json`
 - `~/.moa/usage-pricing-overrides.json`
+- `~/.moa/usage-pricing-catalog-v1.json`
 - `~/.moa/backups`
+- `~/Library/Application Support/Moa/usage-pricing-update-state.json`
+
+Moa 每天按本地时间在 `00:20:01` 检查 `https://models.dev/api.json`；如果当时没有运行，会在该时间之后的下一次启动时补查。通过校验的新增模型和价格字段变化会合并进本地目录；自定义价格始终优先，网络或远程目录不可用时继续使用内置价格表。
 
 开启 iCloud 存储后，Moa 会直接读写 `iCloud Drive/Moa`，不再读写 `~/.moa`。
 

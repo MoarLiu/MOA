@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.6 - 2026-07-10
+
+- Refreshed GPT-5.6 pricing, adding Sol, Terra, and Luna with current standard, long-context, cached-input, and Priority rates.
+- Added a daily 00:20:01 local-time pricing refresh from `models.dev`, with startup catch-up, validated incremental snapshots, and built-in pricing fallback.
+
 ## 1.1.5 - 2026-07-03
 
 - Added a main-menu Check Update action backed by GitHub Releases.

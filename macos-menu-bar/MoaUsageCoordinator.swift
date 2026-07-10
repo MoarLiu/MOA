@@ -25,6 +25,7 @@ final class MoaUsageCoordinator {
     private let codexQueue = DispatchQueue(label: "com.moarliu.moa.codex-usage", qos: .utility)
     private let claudeQueue = DispatchQueue(label: "com.moarliu.moa.claude-usage", qos: .utility)
     private let zcodeQueue = DispatchQueue(label: "com.moarliu.moa.zcode-usage", qos: .utility)
+    private let pricingUpdateCoordinator: MoaUsagePricingUpdateCoordinator
 
     private var codexTimer: Timer?
     private var claudeTimer: Timer?
@@ -41,20 +42,29 @@ final class MoaUsageCoordinator {
     init(
         codexScanner: CodexUsageScanner = CodexUsageScanner(),
         claudeScanner: ClaudeUsageScanner = ClaudeUsageScanner(),
-        zcodeScanner: ZCodeUsageScanner = ZCodeUsageScanner()
+        zcodeScanner: ZCodeUsageScanner = ZCodeUsageScanner(),
+        pricingUpdateCoordinator: MoaUsagePricingUpdateCoordinator = MoaUsagePricingUpdateCoordinator()
     ) {
         self.codexScanner = codexScanner
         self.claudeScanner = claudeScanner
         self.zcodeScanner = zcodeScanner
+        self.pricingUpdateCoordinator = pricingUpdateCoordinator
     }
 
     func start() {
+        pricingUpdateCoordinator.onCatalogUpdated = { [weak self] in
+            self?.refreshCodex(forceRefresh: true)
+            self?.refreshClaude(forceRefresh: true)
+            self?.refreshZCode(forceRefresh: true)
+        }
+        pricingUpdateCoordinator.start()
         startCodex()
         startClaude()
         startZCode()
     }
 
     func stop() {
+        pricingUpdateCoordinator.stop()
         codexTimer?.invalidate()
         codexTimer = nil
         claudeTimer?.invalidate()

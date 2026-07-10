@@ -1304,6 +1304,8 @@ enum MoaUsagePricing {
     private static let fallbackCodexPricingModel = "gpt-5.5"
     private static let fallbackClaudePricingModel = "claude-opus-4-7"
     private static let fallbackZCodePricingModel = "GLM-5.2"
+    private static let catalogStoreLock = NSLock()
+    private static var catalogStore = MoaUsagePricingCatalogStore.shared
 
     private struct CodexPricing {
         let inputCostPerToken: Double
@@ -1358,8 +1360,13 @@ enum MoaUsagePricing {
         "gpt-5.4-nano": CodexPricing(inputCostPerToken: 2e-7, outputCostPerToken: 1.25e-6, cacheReadInputCostPerToken: 2e-8, displayLabel: nil, thresholdTokens: nil, inputCostPerTokenAboveThreshold: nil, outputCostPerTokenAboveThreshold: nil, cacheReadInputCostPerTokenAboveThreshold: nil, priorityInputCostPerToken: nil, priorityOutputCostPerToken: nil, priorityCacheReadInputCostPerToken: nil),
         "gpt-5.4-pro": CodexPricing(inputCostPerToken: 3e-5, outputCostPerToken: 1.8e-4, cacheReadInputCostPerToken: nil, displayLabel: nil, thresholdTokens: nil, inputCostPerTokenAboveThreshold: nil, outputCostPerTokenAboveThreshold: nil, cacheReadInputCostPerTokenAboveThreshold: nil, priorityInputCostPerToken: nil, priorityOutputCostPerToken: nil, priorityCacheReadInputCostPerToken: nil),
         "gpt-5.5": CodexPricing(inputCostPerToken: 5e-6, outputCostPerToken: 3e-5, cacheReadInputCostPerToken: 5e-7, displayLabel: nil, thresholdTokens: 272_000, inputCostPerTokenAboveThreshold: 1e-5, outputCostPerTokenAboveThreshold: 4.5e-5, cacheReadInputCostPerTokenAboveThreshold: 1e-6, priorityInputCostPerToken: 1.25e-5, priorityOutputCostPerToken: 7.5e-5, priorityCacheReadInputCostPerToken: 1.25e-6),
-        "gpt-5.6": CodexPricing(inputCostPerToken: 5e-6, outputCostPerToken: 3e-5, cacheReadInputCostPerToken: 5e-7, displayLabel: nil, thresholdTokens: 272_000, inputCostPerTokenAboveThreshold: 1e-5, outputCostPerTokenAboveThreshold: 4.5e-5, cacheReadInputCostPerTokenAboveThreshold: 1e-6, priorityInputCostPerToken: 1.25e-5, priorityOutputCostPerToken: 7.5e-5, priorityCacheReadInputCostPerToken: 1.25e-6),
-        "gpt-5.5-pro": CodexPricing(inputCostPerToken: 3e-5, outputCostPerToken: 1.8e-4, cacheReadInputCostPerToken: nil, displayLabel: nil, thresholdTokens: nil, inputCostPerTokenAboveThreshold: nil, outputCostPerTokenAboveThreshold: nil, cacheReadInputCostPerTokenAboveThreshold: nil, priorityInputCostPerToken: nil, priorityOutputCostPerToken: nil, priorityCacheReadInputCostPerToken: nil)
+        "gpt-5.5-pro": CodexPricing(inputCostPerToken: 3e-5, outputCostPerToken: 1.8e-4, cacheReadInputCostPerToken: nil, displayLabel: nil, thresholdTokens: nil, inputCostPerTokenAboveThreshold: nil, outputCostPerTokenAboveThreshold: nil, cacheReadInputCostPerTokenAboveThreshold: nil, priorityInputCostPerToken: nil, priorityOutputCostPerToken: nil, priorityCacheReadInputCostPerToken: nil),
+        // Refreshed 2026-07-10 from https://models.dev/api.json and cross-checked against
+        // https://developers.openai.com/api/docs/pricing.md. The gpt-5.6 alias routes to Sol.
+        "gpt-5.6": CodexPricing(inputCostPerToken: 5e-6, outputCostPerToken: 3e-5, cacheReadInputCostPerToken: 5e-7, displayLabel: nil, thresholdTokens: 272_000, inputCostPerTokenAboveThreshold: 1e-5, outputCostPerTokenAboveThreshold: 4.5e-5, cacheReadInputCostPerTokenAboveThreshold: 1e-6, priorityInputCostPerToken: 1e-5, priorityOutputCostPerToken: 6e-5, priorityCacheReadInputCostPerToken: 1e-6),
+        "gpt-5.6-sol": CodexPricing(inputCostPerToken: 5e-6, outputCostPerToken: 3e-5, cacheReadInputCostPerToken: 5e-7, displayLabel: nil, thresholdTokens: 272_000, inputCostPerTokenAboveThreshold: 1e-5, outputCostPerTokenAboveThreshold: 4.5e-5, cacheReadInputCostPerTokenAboveThreshold: 1e-6, priorityInputCostPerToken: 1e-5, priorityOutputCostPerToken: 6e-5, priorityCacheReadInputCostPerToken: 1e-6),
+        "gpt-5.6-terra": CodexPricing(inputCostPerToken: 2.5e-6, outputCostPerToken: 1.5e-5, cacheReadInputCostPerToken: 2.5e-7, displayLabel: nil, thresholdTokens: 272_000, inputCostPerTokenAboveThreshold: 5e-6, outputCostPerTokenAboveThreshold: 2.25e-5, cacheReadInputCostPerTokenAboveThreshold: 5e-7, priorityInputCostPerToken: 5e-6, priorityOutputCostPerToken: 3e-5, priorityCacheReadInputCostPerToken: 5e-7),
+        "gpt-5.6-luna": CodexPricing(inputCostPerToken: 1e-6, outputCostPerToken: 6e-6, cacheReadInputCostPerToken: 1e-7, displayLabel: nil, thresholdTokens: 272_000, inputCostPerTokenAboveThreshold: 2e-6, outputCostPerTokenAboveThreshold: 9e-6, cacheReadInputCostPerTokenAboveThreshold: 2e-7, priorityInputCostPerToken: 2e-6, priorityOutputCostPerToken: 1.2e-5, priorityCacheReadInputCostPerToken: 2e-7)
     ]
 
     private static let claude: [String: ClaudePricing] = [
@@ -1385,6 +1392,75 @@ enum MoaUsagePricing {
         "glm-5-turbo": ZCodePricing(inputCostPerToken: 1.2e-6, outputCostPerToken: 4.0e-6, cacheCreationInputCostPerToken: 0, cacheReadInputCostPerToken: 0.24e-6)
     ]
 
+#if MOA_TESTING
+    static func useRemoteCatalogStoreForTesting(_ store: MoaUsagePricingCatalogStore) {
+        catalogStoreLock.lock()
+        catalogStore = store
+        catalogStoreLock.unlock()
+    }
+
+    static func resetRemoteCatalogStoreForTesting() {
+        useRemoteCatalogStoreForTesting(.shared)
+    }
+#endif
+
+    private static func remotePricing(source: MoaUsageSource, model: String) -> MoaUsageRemotePricing? {
+        catalogStoreLock.lock()
+        let store = catalogStore
+        catalogStoreLock.unlock()
+        return store.pricing(source: source, model: model)
+    }
+
+    private static func codexPricing(model: String) -> CodexPricing? {
+        let builtIn = codex[model]
+        guard let remote = remotePricing(source: .codex, model: model) else { return builtIn }
+        return CodexPricing(
+            inputCostPerToken: perToken(remote.inputUSDPerMillion),
+            outputCostPerToken: perToken(remote.outputUSDPerMillion),
+            cacheReadInputCostPerToken: remote.cacheReadUSDPerMillion.map(perToken) ?? builtIn?.cacheReadInputCostPerToken,
+            displayLabel: builtIn?.displayLabel,
+            thresholdTokens: remote.thresholdTokens ?? builtIn?.thresholdTokens,
+            inputCostPerTokenAboveThreshold: remote.inputUSDPerMillionAboveThreshold.map(perToken) ?? builtIn?.inputCostPerTokenAboveThreshold,
+            outputCostPerTokenAboveThreshold: remote.outputUSDPerMillionAboveThreshold.map(perToken) ?? builtIn?.outputCostPerTokenAboveThreshold,
+            cacheReadInputCostPerTokenAboveThreshold: remote.cacheReadUSDPerMillionAboveThreshold.map(perToken) ?? builtIn?.cacheReadInputCostPerTokenAboveThreshold,
+            priorityInputCostPerToken: builtIn?.priorityInputCostPerToken,
+            priorityOutputCostPerToken: builtIn?.priorityOutputCostPerToken,
+            priorityCacheReadInputCostPerToken: builtIn?.priorityCacheReadInputCostPerToken
+        )
+    }
+
+    private static func claudePricing(model: String) -> ClaudePricing? {
+        let builtIn = claude[model]
+        guard let remote = remotePricing(source: .claude, model: model) else { return builtIn }
+        return ClaudePricing(
+            inputCostPerToken: perToken(remote.inputUSDPerMillion),
+            outputCostPerToken: perToken(remote.outputUSDPerMillion),
+            cacheCreationInputCostPerToken: remote.cacheCreationUSDPerMillion.map(perToken) ?? builtIn?.cacheCreationInputCostPerToken ?? perToken(remote.inputUSDPerMillion),
+            cacheReadInputCostPerToken: remote.cacheReadUSDPerMillion.map(perToken) ?? builtIn?.cacheReadInputCostPerToken ?? perToken(remote.inputUSDPerMillion),
+            thresholdTokens: remote.thresholdTokens ?? builtIn?.thresholdTokens,
+            inputCostPerTokenAboveThreshold: remote.inputUSDPerMillionAboveThreshold.map(perToken) ?? builtIn?.inputCostPerTokenAboveThreshold,
+            outputCostPerTokenAboveThreshold: remote.outputUSDPerMillionAboveThreshold.map(perToken) ?? builtIn?.outputCostPerTokenAboveThreshold,
+            cacheCreationInputCostPerTokenAboveThreshold: remote.cacheCreationUSDPerMillionAboveThreshold.map(perToken) ?? builtIn?.cacheCreationInputCostPerTokenAboveThreshold,
+            cacheReadInputCostPerTokenAboveThreshold: remote.cacheReadUSDPerMillionAboveThreshold.map(perToken) ?? builtIn?.cacheReadInputCostPerTokenAboveThreshold
+        )
+    }
+
+    private static func zcodePricing(model: String) -> ZCodePricing? {
+        let key = model.lowercased()
+        let builtIn = zcode[key]
+        guard let remote = remotePricing(source: .zcode, model: key) else { return builtIn }
+        return ZCodePricing(
+            inputCostPerToken: perToken(remote.inputUSDPerMillion),
+            outputCostPerToken: perToken(remote.outputUSDPerMillion),
+            cacheCreationInputCostPerToken: remote.cacheCreationUSDPerMillion.map(perToken) ?? builtIn?.cacheCreationInputCostPerToken ?? 0,
+            cacheReadInputCostPerToken: remote.cacheReadUSDPerMillion.map(perToken) ?? builtIn?.cacheReadInputCostPerToken ?? perToken(remote.inputUSDPerMillion)
+        )
+    }
+
+    private static func perToken(_ perMillion: Double) -> Double {
+        perMillion / 1_000_000
+    }
+
     static func normalizeModel(_ raw: String) -> String {
         normalizeCodexModel(raw)
     }
@@ -1395,13 +1471,13 @@ enum MoaUsagePricing {
             trimmed = String(trimmed.dropFirst("openai/".count))
         }
 
-        if codex[trimmed] != nil {
+        if codexPricing(model: trimmed) != nil {
             return trimmed
         }
 
         if let range = trimmed.range(of: #"-\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) {
             let base = String(trimmed[..<range.lowerBound])
-            if codex[base] != nil {
+            if codexPricing(model: base) != nil {
                 return base
             }
         }
@@ -1434,7 +1510,7 @@ enum MoaUsagePricing {
 
         if let range = trimmed.range(of: #"-\d{8}$"#, options: .regularExpression) {
             let base = String(trimmed[..<range.lowerBound])
-            if claude[base] != nil {
+            if claudePricing(model: base) != nil {
                 return base
             }
         }
@@ -1461,7 +1537,7 @@ enum MoaUsagePricing {
     }
 
     static func codexDisplayLabel(model: String) -> String? {
-        codex[normalizeCodexModel(model)]?.displayLabel
+        codexPricing(model: normalizeCodexModel(model))?.displayLabel
     }
 
     static func costUSD(model: String, inputTokens: Int, cachedInputTokens: Int, outputTokens: Int) -> Double? {
@@ -1493,9 +1569,9 @@ enum MoaUsagePricing {
         outputTokens: Int) -> CostEstimate?
     {
         let normalized = normalizeCodexModel(model)
-        let usesFallback = codex[normalized] == nil
+        let usesFallback = codexPricing(model: normalized) == nil
         let pricingModel = usesFallback ? fallbackCodexPricingModel : normalized
-        guard let pricing = codex[pricingModel] else { return nil }
+        guard let pricing = codexPricing(model: pricingModel) else { return nil }
         let cost = codexCostUSD(
             pricing: pricing,
             inputTokens: inputTokens,
@@ -1511,8 +1587,8 @@ enum MoaUsagePricing {
 
     static func codexCacheReadUSDPerMillion(model: String, inputTokens: Int = 1) -> Double? {
         let normalized = normalizeCodexModel(model)
-        let pricingModel = codex[normalized] == nil ? fallbackCodexPricingModel : normalized
-        guard let pricing = codex[pricingModel] else { return nil }
+        let pricingModel = codexPricing(model: normalized) == nil ? fallbackCodexPricingModel : normalized
+        guard let pricing = codexPricing(model: pricingModel) else { return nil }
         let baseRate = pricing.cacheReadInputCostPerToken ?? pricing.inputCostPerToken
         let usesLongContextRates = pricing.thresholdTokens.map { max(0, inputTokens) > $0 } ?? false
         let rate = usesLongContextRates ? pricing.cacheReadInputCostPerTokenAboveThreshold ?? baseRate : baseRate
@@ -1526,7 +1602,7 @@ enum MoaUsagePricing {
         outputTokens: Int) -> Double?
     {
         let normalized = normalizeCodexModel(model)
-        guard let pricing = codex[normalized],
+        guard let pricing = codexPricing(model: normalized),
               let priorityInput = pricing.priorityInputCostPerToken,
               let priorityOutput = pricing.priorityOutputCostPerToken,
               max(0, inputTokens) <= codexPriorityInputTokenLimit
@@ -1577,9 +1653,9 @@ enum MoaUsagePricing {
         outputTokens: Int) -> CostEstimate?
     {
         let normalized = normalizeClaudeModel(model)
-        let usesFallback = claude[normalized] == nil
+        let usesFallback = claudePricing(model: normalized) == nil
         let pricingModel = usesFallback ? fallbackClaudePricingModel : normalized
-        guard let pricing = claude[pricingModel] else { return nil }
+        guard let pricing = claudePricing(model: pricingModel) else { return nil }
         let cost = claudeCostUSD(
             pricing: pricing,
             inputTokens: inputTokens,
@@ -1596,8 +1672,8 @@ enum MoaUsagePricing {
 
     static func claudeCacheReadUSDPerMillion(model: String, promptTokens: Int = 1) -> Double? {
         let normalized = normalizeClaudeModel(model)
-        let pricingModel = claude[normalized] == nil ? fallbackClaudePricingModel : normalized
-        guard let pricing = claude[pricingModel] else { return nil }
+        let pricingModel = claudePricing(model: normalized) == nil ? fallbackClaudePricingModel : normalized
+        guard let pricing = claudePricing(model: pricingModel) else { return nil }
         let usesLongContextRates = pricing.thresholdTokens.map { max(0, promptTokens) > $0 } ?? false
         let rate = usesLongContextRates ? pricing.cacheReadInputCostPerTokenAboveThreshold ?? pricing.cacheReadInputCostPerToken : pricing.cacheReadInputCostPerToken
         return rate * 1_000_000
@@ -1605,8 +1681,8 @@ enum MoaUsagePricing {
 
     static func claudeCacheCreationUSDPerMillion(model: String, promptTokens: Int = 1) -> Double? {
         let normalized = normalizeClaudeModel(model)
-        let pricingModel = claude[normalized] == nil ? fallbackClaudePricingModel : normalized
-        guard let pricing = claude[pricingModel] else { return nil }
+        let pricingModel = claudePricing(model: normalized) == nil ? fallbackClaudePricingModel : normalized
+        guard let pricing = claudePricing(model: pricingModel) else { return nil }
         let usesLongContextRates = pricing.thresholdTokens.map { max(0, promptTokens) > $0 } ?? false
         let rate = usesLongContextRates ? pricing.cacheCreationInputCostPerTokenAboveThreshold ?? pricing.cacheCreationInputCostPerToken : pricing.cacheCreationInputCostPerToken
         return rate * 1_000_000
@@ -1620,9 +1696,9 @@ enum MoaUsagePricing {
         outputTokens: Int) -> CostEstimate?
     {
         let normalized = normalizeZCodeModel(model)
-        let usesFallback = zcode[normalized.lowercased()] == nil
+        let usesFallback = zcodePricing(model: normalized) == nil
         let pricingModel = usesFallback ? fallbackZCodePricingModel : normalized
-        guard let pricing = zcode[pricingModel.lowercased()] else { return nil }
+        guard let pricing = zcodePricing(model: pricingModel) else { return nil }
         let cost = zcodeCostUSD(
             pricing: pricing,
             inputTokens: inputTokens,
@@ -1639,15 +1715,15 @@ enum MoaUsagePricing {
 
     static func zcodeCacheReadUSDPerMillion(model: String, promptTokens: Int = 1) -> Double? {
         let normalized = normalizeZCodeModel(model)
-        let pricingModel = zcode[normalized.lowercased()] == nil ? fallbackZCodePricingModel : normalized
-        guard let pricing = zcode[pricingModel.lowercased()] else { return nil }
+        let pricingModel = zcodePricing(model: normalized) == nil ? fallbackZCodePricingModel : normalized
+        guard let pricing = zcodePricing(model: pricingModel) else { return nil }
         return pricing.cacheReadInputCostPerToken * 1_000_000
     }
 
     static func zcodeCacheCreationUSDPerMillion(model: String, promptTokens: Int = 1) -> Double? {
         let normalized = normalizeZCodeModel(model)
-        let pricingModel = zcode[normalized.lowercased()] == nil ? fallbackZCodePricingModel : normalized
-        guard let pricing = zcode[pricingModel.lowercased()] else { return nil }
+        let pricingModel = zcodePricing(model: normalized) == nil ? fallbackZCodePricingModel : normalized
+        guard let pricing = zcodePricing(model: pricingModel) else { return nil }
         return pricing.cacheCreationInputCostPerToken * 1_000_000
     }
 
