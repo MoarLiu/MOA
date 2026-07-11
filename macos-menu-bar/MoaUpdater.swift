@@ -191,6 +191,12 @@ final class MoaUpdateController {
         let workDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("MoaUpdate-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: workDirectory, withIntermediateDirectories: true)
+        var handedOffToInstaller = false
+        defer {
+            if !handedOffToInstaller {
+                try? FileManager.default.removeItem(at: workDirectory)
+            }
+        }
         let dmgFilename = update.dmgURL.lastPathComponent.isEmpty
             ? Self.dmgAssetName(version: update.version)
             : update.dmgURL.lastPathComponent
@@ -200,7 +206,11 @@ final class MoaUpdateController {
         try await download(from: update.dmgURL, to: dmgURL)
         try await download(from: update.checksumURL, to: checksumURL)
         try verifyChecksum(dmgURL: dmgURL, checksumURL: checksumURL)
-        try launchInstallerScript(dmgURL: dmgURL, update: update)
+        try launchInstallerScript(dmgURL: dmgURL, update: update, workDirectory: workDirectory)
+        handedOffToInstaller = true
+        await MainActor.run {
+            NSApp.terminate(nil)
+        }
     }
 
     private func download(from remoteURL: URL, to destination: URL) async throws {
@@ -230,7 +240,7 @@ final class MoaUpdateController {
         }
     }
 
-    private func launchInstallerScript(dmgURL: URL, update: MoaUpdateInfo) throws {
+    private func launchInstallerScript(dmgURL: URL, update: MoaUpdateInfo, workDirectory: URL) throws {
         let bundleURL = Bundle.main.bundleURL
         let appParent = bundleURL.deletingLastPathComponent()
         guard FileManager.default.isWritableFile(atPath: appParent.path) else {
@@ -256,6 +266,8 @@ final class MoaUpdateController {
         APP="$2"
         BACKUP="$3"
         LOG="$4"
+        WORK="$5"
+        SCRIPT="$6"
         exec >"$LOG" 2>&1
         MOUNT="$(/usr/bin/hdiutil attach -nobrowse -readonly "$DMG" | /usr/bin/awk '/\\/Volumes\\// {for (i=3; i<=NF; i++) {printf "%s%s", (i==3 ? "" : " "), $i}; print ""; exit}')"
         if [[ -z "$MOUNT" ]]; then
@@ -270,6 +282,8 @@ final class MoaUpdateController {
             /usr/bin/ditto --noextattr --noacl "$BACKUP" "$APP" || true
           fi
           /usr/bin/hdiutil detach "$MOUNT" >/dev/null 2>&1 || true
+          /bin/rm -rf "$WORK" || true
+          /bin/rm -f "$SCRIPT" "$LOG" || true
           exit "$STATUS"
         }
         trap cleanup EXIT
@@ -296,11 +310,20 @@ final class MoaUpdateController {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
-        process.arguments = [scriptURL.path, dmgURL.path, bundleURL.path, backupURL.path, logURL.path]
+        process.arguments = [
+            scriptURL.path,
+            dmgURL.path,
+            bundleURL.path,
+            backupURL.path,
+            logURL.path,
+            workDirectory.path,
+            scriptURL.path
+        ]
         do {
             try process.run()
-            NSApp.terminate(nil)
         } catch {
+            try? FileManager.default.removeItem(at: scriptURL)
+            try? FileManager.default.removeItem(at: logURL)
             throw MoaUpdateError.installerLaunchFailed
         }
     }

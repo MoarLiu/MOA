@@ -16,6 +16,42 @@ EXECUTABLE="$MACOS/$APP_NAME"
 BUNDLE_ID="com.moarliu.moa"
 CODE_SIGN_IDENTITY="${CODE_SIGN_IDENTITY:-Moa Local Development Code Signing}"
 
+resolve_swiftc() {
+  if [[ -n "${SWIFTC:-}" ]]; then
+    if [[ ! -x "$SWIFTC" ]]; then
+      echo "SWIFTC is not executable: $SWIFTC" >&2
+      exit 1
+    fi
+    SWIFTC_BIN="$SWIFTC"
+    SDKROOT="${SDKROOT:-$(/usr/bin/xcrun --sdk macosx --show-sdk-path 2>/dev/null || true)}"
+    if [[ -z "$SDKROOT" || ! -d "$SDKROOT" ]]; then
+      echo "Unable to locate the macOS SDK. Set SDKROOT or DEVELOPER_DIR to a full Xcode toolchain." >&2
+      exit 1
+    fi
+    return
+  fi
+
+  local selected_developer_dir
+  selected_developer_dir="$(/usr/bin/xcode-select -p 2>/dev/null || true)"
+  if [[ -z "${DEVELOPER_DIR:-}" ]] &&
+     [[ "$selected_developer_dir" == "/Library/Developer/CommandLineTools" ]] &&
+     [[ -d "/Applications/Xcode.app/Contents/Developer" ]]; then
+    export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
+    echo "Using full Xcode toolchain for SwiftUI macro support: $DEVELOPER_DIR" >&2
+  fi
+
+  SWIFTC_BIN="$(/usr/bin/xcrun --find swiftc 2>/dev/null || true)"
+  if [[ -z "$SWIFTC_BIN" || ! -x "$SWIFTC_BIN" ]]; then
+    echo "Unable to locate swiftc. Set SWIFTC or DEVELOPER_DIR to a full Xcode toolchain." >&2
+    exit 1
+  fi
+  SDKROOT="${SDKROOT:-$(/usr/bin/xcrun --sdk macosx --show-sdk-path 2>/dev/null || true)}"
+  if [[ -z "$SDKROOT" || ! -d "$SDKROOT" ]]; then
+    echo "Unable to locate the macOS SDK. Set SDKROOT or DEVELOPER_DIR to a full Xcode toolchain." >&2
+    exit 1
+  fi
+}
+
 check_mach_o_deployment_target() {
   local executable="$1"
   local minos
@@ -44,11 +80,14 @@ for source in "${MOA_APP_SOURCES[@]}"; do
   MOA_APP_ABS_SOURCES+=("$ROOT/$source")
 done
 
+resolve_swiftc
+
 rm -rf "$APP"
 mkdir -p "$MACOS" "$RESOURCES"
 
-MACOSX_DEPLOYMENT_TARGET="$MACOS_DEPLOYMENT_TARGET" /usr/bin/swiftc \
+MACOSX_DEPLOYMENT_TARGET="$MACOS_DEPLOYMENT_TARGET" "$SWIFTC_BIN" \
   -target "$SWIFTC_TARGET" \
+  -sdk "$SDKROOT" \
   -O \
   -framework ApplicationServices \
   -framework AppKit \

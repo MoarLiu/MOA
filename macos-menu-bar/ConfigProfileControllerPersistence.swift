@@ -6,19 +6,32 @@ extension ConfigProfileController {
             try ensureStoreIfMissingOnly()
             let modified = (try? fileManager.attributesOfItem(atPath: databaseURL.path))?[.modificationDate] as? Date
             if let cachedDatabase, let cachedDatabaseModified, let modified,
-               cachedDatabaseModified == modified {
+               cachedDatabaseModified == modified,
+               cachedDatabaseURLPath == databaseURL.standardizedFileURL.path {
                 return cachedDatabase
             }
             let data = try Data(contentsOf: databaseURL)
             let database = try JSONDecoder().decode(ProfileDatabase.self, from: data)
             cachedDatabase = database
             cachedDatabaseModified = modified
+            cachedDatabaseURLPath = databaseURL.standardizedFileURL.path
             return database
         }
     }
 
     func saveDatabase(_ database: ProfileDatabase) throws {
         try stateLock.withLock {
+            #if MOA_TESTING
+            if Self.testingProfileDatabaseSaveFailuresRemaining > 0 {
+                Self.testingProfileDatabaseSaveFailuresRemaining -= 1
+                throw NSError(
+                    domain: "MoaTests",
+                    code: 500,
+                    userInfo: [NSLocalizedDescriptionKey: "Injected Codex profile database save failure."]
+                )
+            }
+            #endif
+            try database.profiles.compactMap(\.bridgePort).forEach { _ = try MoaProviderBridgePort.validated($0) }
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let data = try encoder.encode(database)
@@ -26,6 +39,7 @@ extension ConfigProfileController {
             try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: databaseURL.path)
             cachedDatabase = database
             cachedDatabaseModified = (try? fileManager.attributesOfItem(atPath: databaseURL.path))?[.modificationDate] as? Date
+            cachedDatabaseURLPath = databaseURL.standardizedFileURL.path
         }
     }
 
@@ -36,19 +50,33 @@ extension ConfigProfileController {
             if let cachedOfficialAccountDatabase,
                let cachedOfficialAccountDatabaseModified,
                let modified,
-               cachedOfficialAccountDatabaseModified == modified {
+               cachedOfficialAccountDatabaseModified == modified,
+               cachedOfficialAccountDatabaseURLPath == officialAccountsDatabaseURL.standardizedFileURL.path {
                 return cachedOfficialAccountDatabase
             }
             let data = try Data(contentsOf: officialAccountsDatabaseURL)
             let database = try JSONDecoder().decode(CodexOfficialAccountDatabase.self, from: data)
+            try database.accounts.forEach { _ = try officialAuthURL(for: $0) }
             cachedOfficialAccountDatabase = database
             cachedOfficialAccountDatabaseModified = modified
+            cachedOfficialAccountDatabaseURLPath = officialAccountsDatabaseURL.standardizedFileURL.path
             return database
         }
     }
 
     func saveOfficialAccountDatabase(_ database: CodexOfficialAccountDatabase) throws {
         try stateLock.withLock {
+            #if MOA_TESTING
+            if Self.testingOfficialAccountDatabaseSaveFailuresRemaining > 0 {
+                Self.testingOfficialAccountDatabaseSaveFailuresRemaining -= 1
+                throw NSError(
+                    domain: "MoaTests",
+                    code: 500,
+                    userInfo: [NSLocalizedDescriptionKey: "Injected Codex official account database save failure."]
+                )
+            }
+            #endif
+            try database.accounts.forEach { _ = try officialAuthURL(for: $0) }
             try fileManager.createDirectory(at: officialAccountsDatabaseURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -57,6 +85,7 @@ extension ConfigProfileController {
             try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: officialAccountsDatabaseURL.path)
             cachedOfficialAccountDatabase = database
             cachedOfficialAccountDatabaseModified = (try? fileManager.attributesOfItem(atPath: officialAccountsDatabaseURL.path))?[.modificationDate] as? Date
+            cachedOfficialAccountDatabaseURLPath = officialAccountsDatabaseURL.standardizedFileURL.path
         }
     }
 
@@ -198,7 +227,7 @@ extension ConfigProfileController {
 
         database.accounts[index].email = officialAuthEmail(from: auth) ?? database.accounts[index].email
         database.accounts[index].lastUsedAt = Self.isoTimestamp()
-        try writeAuthJSON(auth, to: officialAuthURL(for: database.accounts[index]))
+        try writeAuthJSON(auth, to: try officialAuthURL(for: database.accounts[index]))
         try saveOfficialAccountDatabase(database)
     }
 
@@ -281,9 +310,111 @@ extension ConfigProfileController {
     }
 
     func copyFile(from source: URL, to destination: URL) throws {
-        try? fileManager.removeItem(at: destination)
-        try fileManager.copyItem(at: source, to: destination)
+        let data = try Data(contentsOf: source)
+        try fileManager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: destination, options: .atomic)
         try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
+    }
+
+    func withCodexStateTransaction<T>(
+        files: [URL],
+        includeOfficialAuthDirectory: Bool = false,
+        operation: () throws -> T
+    ) throws -> T {
+        let uniqueFiles = Dictionary(grouping: files, by: { $0.standardizedFileURL.path })
+            .values
+            .compactMap(\.first)
+        let fileSnapshots = try uniqueFiles.map { url in
+            StateFileSnapshot(
+                url: url,
+                data: fileManager.fileExists(atPath: url.path) ? try Data(contentsOf: url) : nil
+            )
+        }
+        let directorySnapshot = includeOfficialAuthDirectory
+            ? try snapshotDirectory(officialAuthAccountsDir)
+            : nil
+        let cachedDatabaseBefore = cachedDatabase
+        let cachedDatabaseModifiedBefore = cachedDatabaseModified
+        let cachedDatabaseURLPathBefore = cachedDatabaseURLPath
+        let cachedOfficialDatabaseBefore = cachedOfficialAccountDatabase
+        let cachedOfficialDatabaseModifiedBefore = cachedOfficialAccountDatabaseModified
+        let cachedOfficialDatabaseURLPathBefore = cachedOfficialAccountDatabaseURLPath
+
+        do {
+            return try operation()
+        } catch let operationError {
+            do {
+                for snapshot in fileSnapshots {
+                    try restoreStateFile(snapshot)
+                }
+                if let directorySnapshot {
+                    try restoreStateDirectory(directorySnapshot)
+                }
+                cachedDatabase = cachedDatabaseBefore
+                cachedDatabaseModified = cachedDatabaseModifiedBefore
+                cachedDatabaseURLPath = cachedDatabaseURLPathBefore
+                cachedOfficialAccountDatabase = cachedOfficialDatabaseBefore
+                cachedOfficialAccountDatabaseModified = cachedOfficialDatabaseModifiedBefore
+                cachedOfficialAccountDatabaseURLPath = cachedOfficialDatabaseURLPathBefore
+            } catch let rollbackError {
+                throw NSError(
+                    domain: "Moa",
+                    code: 500,
+                    userInfo: [NSLocalizedDescriptionKey: MoaL10n.format(
+                        "Codex state update failed (%@), and rollback also failed: %@",
+                        operationError.localizedDescription,
+                        rollbackError.localizedDescription
+                    )]
+                )
+            }
+            throw operationError
+        }
+    }
+
+    private func snapshotDirectory(_ url: URL) throws -> StateDirectorySnapshot {
+        guard fileManager.fileExists(atPath: url.path) else {
+            return StateDirectorySnapshot(url: url, existed: false, files: [:])
+        }
+        let rootPath = url.resolvingSymlinksInPath().standardizedFileURL.path
+        var files: [String: Data] = [:]
+        guard let enumerator = fileManager.enumerator(at: url, includingPropertiesForKeys: [.isRegularFileKey]) else {
+            throw CocoaError(.fileReadUnknown)
+        }
+        for case let child as URL in enumerator {
+            let values = try child.resourceValues(forKeys: [.isRegularFileKey])
+            guard values.isRegularFile == true else { continue }
+            let childPath = child.standardizedFileURL.path
+            guard childPath.hasPrefix(rootPath + "/") else {
+                throw CocoaError(.fileReadInvalidFileName)
+            }
+            let relative = String(childPath.dropFirst(rootPath.count + 1))
+            files[relative] = try Data(contentsOf: child)
+        }
+        return StateDirectorySnapshot(url: url, existed: true, files: files)
+    }
+
+    private func restoreStateFile(_ snapshot: StateFileSnapshot) throws {
+        if let data = snapshot.data {
+            try fileManager.createDirectory(at: snapshot.url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: snapshot.url, options: .atomic)
+            try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: snapshot.url.path)
+        } else if fileManager.fileExists(atPath: snapshot.url.path) {
+            try fileManager.removeItem(at: snapshot.url)
+        }
+    }
+
+    private func restoreStateDirectory(_ snapshot: StateDirectorySnapshot) throws {
+        if fileManager.fileExists(atPath: snapshot.url.path) {
+            try fileManager.removeItem(at: snapshot.url)
+        }
+        guard snapshot.existed else { return }
+        try fileManager.createDirectory(at: snapshot.url, withIntermediateDirectories: true)
+        for (relative, data) in snapshot.files {
+            let destination = snapshot.url.appendingPathComponent(relative)
+            try fileManager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: destination, options: .atomic)
+            try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
+        }
     }
 
     func isPlaceholderConfig(at url: URL) throws -> Bool {

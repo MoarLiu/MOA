@@ -38,6 +38,28 @@ enum MoaProviderBridgeDefaults {
     static let deepSeekAnthropicBaseURL = "https://api.deepseek.com/anthropic"
 }
 
+enum MoaProviderBridgePortError: LocalizedError, Equatable {
+    case outOfRange(Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .outOfRange(let port):
+            return MoaL10n.format("Provider bridge port must be between 0 and 65535 (received %lld).", Int64(clamping: port))
+        }
+    }
+}
+
+enum MoaProviderBridgePort {
+    static let range = 0...65535
+
+    static func validated(_ port: Int) throws -> Int {
+        guard range.contains(port) else {
+            throw MoaProviderBridgePortError.outOfRange(port)
+        }
+        return port
+    }
+}
+
 enum MoaProviderBridgeEndpointNormalizer {
     static func normalizedDeepSeekChatBaseURL(_ raw: String) throws -> String {
         let validation = try MoaProviderBaseURLPolicy.validate(raw)
@@ -1187,10 +1209,6 @@ final class MoaChatSSEToResponsesSSEConverter {
             for toolDelta in toolDeltas {
                 mergeToolDelta(toolDelta)
             }
-        }
-
-        if choice["finish_reason"] as? String != nil {
-            frames.append(contentsOf: try finish())
         }
 
         return frames

@@ -25,8 +25,8 @@ extension AppDelegate {
         rebuildProviderBridgeMenu()
     }
 
-    func providerBridgeProfiles() -> [ConfigProfile] {
-        (try? providerBridgeProfileController.profiles()) ?? []
+    func providerBridgeProfiles() throws -> [ConfigProfile] {
+        try providerBridgeProfileController.profiles()
     }
 
     func migrateLegacyProviderBridgeProfilesIfNeeded() {
@@ -38,7 +38,7 @@ extension AppDelegate {
     }
 
     func preferredProviderBridgeProfile() throws -> ConfigProfile {
-        let profiles = providerBridgeProfiles()
+        let profiles = try providerBridgeProfiles()
         guard !profiles.isEmpty else {
             throw NSError(
                 domain: "Moa",

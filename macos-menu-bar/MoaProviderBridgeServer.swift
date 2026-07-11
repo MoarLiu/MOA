@@ -52,6 +52,7 @@ enum MoaProviderBridgeServerError: LocalizedError {
     case bindFailed(Int32)
     case invalidRequest
     case missingBridgeToken
+    case invalidPort(Int)
 
     var errorDescription: String? {
         switch self {
@@ -61,15 +62,18 @@ enum MoaProviderBridgeServerError: LocalizedError {
             return "Moa provider bridge received an invalid HTTP request."
         case .missingBridgeToken:
             return "Moa provider bridge profile is missing its local bridge token."
+        case .invalidPort(let port):
+            return MoaProviderBridgePortError.outOfRange(port).localizedDescription
         }
     }
 }
 
-final class MoaProviderBridgeServer {
+final class MoaProviderBridgeServer: @unchecked Sendable {
     private let urlSession: URLSession
     private let diagnostics: MoaProviderBridgeDiagnostics
     private let acceptQueue = DispatchQueue(label: "moa.provider-bridge.accept")
     private let workerQueue = DispatchQueue(label: "moa.provider-bridge.worker", attributes: .concurrent)
+    private let lifecycleLock = NSRecursiveLock()
     private let stateLock = NSRecursiveLock()
     private var socketFD: Int32 = -1
     private var acceptSource: DispatchSourceRead?
@@ -86,14 +90,23 @@ final class MoaProviderBridgeServer {
     }
 
     func start(configuration: MoaProviderBridgeServerConfiguration) throws -> Int {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
         let bridgeToken = configuration.bridgeToken.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !bridgeToken.isEmpty else {
             throw MoaProviderBridgeServerError.missingBridgeToken
         }
 
         stop()
-        let requestedPort = max(0, configuration.port)
-        let candidates = requestedPort == 0 ? [0] : Array(requestedPort...(requestedPort + 50))
+        let requestedPort: Int
+        do {
+            requestedPort = try MoaProviderBridgePort.validated(configuration.port)
+        } catch {
+            throw MoaProviderBridgeServerError.invalidPort(configuration.port)
+        }
+        let (unclampedProbeEnd, overflowed) = requestedPort.addingReportingOverflow(50)
+        let probeEnd = overflowed ? 65535 : min(65535, unclampedProbeEnd)
+        let candidates = requestedPort == 0 ? [0] : Array(requestedPort...probeEnd)
         var lastErrno: Int32 = 0
 
         for candidate in candidates {
@@ -105,12 +118,6 @@ final class MoaProviderBridgeServer {
                 mutableConfiguration.port = port
                 mutableConfiguration.bridgeToken = bridgeToken
 
-                stateLock.lock()
-                socketFD = fd
-                self.configuration = mutableConfiguration
-                activePort = port
-                stateLock.unlock()
-
                 let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: acceptQueue)
                 source.setEventHandler { [weak self] in
                     self?.acceptAvailableConnections()
@@ -119,6 +126,9 @@ final class MoaProviderBridgeServer {
                     close(fd)
                 }
                 stateLock.lock()
+                socketFD = fd
+                self.configuration = mutableConfiguration
+                activePort = port
                 acceptSource = source
                 stateLock.unlock()
                 source.resume()
@@ -143,6 +153,8 @@ final class MoaProviderBridgeServer {
     }
 
     func stop() {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
         stateLock.lock()
         let source = acceptSource
         acceptSource = nil

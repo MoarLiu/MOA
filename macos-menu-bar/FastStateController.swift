@@ -12,12 +12,13 @@ private enum FastModeError: LocalizedError {
     }
 }
 
-final class FastStateController {
-    private let fileManager = FileManager.default
+final class FastStateController: Sendable {
     private let environment: [String: String]
     private let codexHome: URL
     private let codexApp: URL
     private let backupDir: URL
+
+    private var fileManager: FileManager { .default }
 
     private var stateURL: URL {
         codexHome.appendingPathComponent(".codex-global-state.json")
@@ -179,12 +180,12 @@ final class FastStateController {
         try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
-    private func remoteConnectionsEnabled(in text: String) -> Bool {
+    func remoteConnectionsEnabled(in text: String) -> Bool {
         tomlBoolValue(in: text, table: "features", key: "remote_connections") == true
             && tomlBoolValue(in: text, table: "features", key: "remote_control") == true
     }
 
-    private func setRemoteConnections(_ enabled: Bool, in text: String) -> String {
+    func setRemoteConnections(_ enabled: Bool, in text: String) -> String {
         enabled ? enableRemoteConnections(in: text) : disableRemoteConnections(in: text)
     }
 
@@ -198,10 +199,11 @@ final class FastStateController {
         var inFeatures = false
         var foundFeatures = false
 
-        for line in text.components(separatedBy: "\n") {
+        for context in MoaTomlEditor.lineContexts(in: text) {
+            let line = context.text
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
 
-            if let table = parseTomlTableName(from: trimmed) {
+            if context.isStructural, let table = parseTomlTableName(from: trimmed) {
                 inFeatures = table == "features"
                 if inFeatures {
                     foundFeatures = true
@@ -212,7 +214,7 @@ final class FastStateController {
                 continue
             }
 
-            if inFeatures,
+            if inFeatures, context.isStructural,
                let keyValue = parseTomlKeyValue(from: line),
                keyValue.key == "remote_connections" || keyValue.key == "remote_control" {
                 continue
@@ -234,7 +236,7 @@ final class FastStateController {
     private func disableRemoteConnections(in text: String) -> String {
         var output: [String] = []
         var featureHeader: String?
-        var featureLines: [String] = []
+        var featureLines: [MoaTomlEditor.LineContext] = []
         var inFeatures = false
 
         func flushFeatures() {
@@ -242,27 +244,30 @@ final class FastStateController {
                 return
             }
 
-            let remaining = featureLines.filter { line in
-                guard let keyValue = parseTomlKeyValue(from: line) else {
+            let remaining = featureLines.filter { context in
+                guard context.isStructural,
+                      let keyValue = parseTomlKeyValue(from: context.text)
+                else {
                     return true
                 }
                 return keyValue.key != "remote_connections" && keyValue.key != "remote_control"
             }
-            let hasNonEmptyContent = remaining.contains { line in
-                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            let hasNonEmptyContent = remaining.contains { context in
+                let trimmed = context.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 return !trimmed.isEmpty && !trimmed.hasPrefix("#")
             }
 
             if hasNonEmptyContent {
                 output.append(featureHeader)
-                output.append(contentsOf: remaining)
+                output.append(contentsOf: remaining.map(\.text))
             }
         }
 
-        for line in text.components(separatedBy: "\n") {
+        for context in MoaTomlEditor.lineContexts(in: text) {
+            let line = context.text
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
 
-            if let table = parseTomlTableName(from: trimmed) {
+            if context.isStructural, let table = parseTomlTableName(from: trimmed) {
                 if inFeatures {
                     flushFeatures()
                     featureHeader = nil
@@ -279,7 +284,7 @@ final class FastStateController {
             }
 
             if inFeatures {
-                featureLines.append(line)
+                featureLines.append(context)
             } else {
                 output.append(line)
             }
@@ -295,7 +300,8 @@ final class FastStateController {
     private func tomlBoolValue(in text: String, table: String, key: String) -> Bool? {
         var currentTable = ""
 
-        for line in text.components(separatedBy: "\n") {
+        for context in MoaTomlEditor.lineContexts(in: text) where context.isStructural {
+            let line = context.text
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             if let tableName = parseTomlTableName(from: trimmed) {
                 currentTable = tableName

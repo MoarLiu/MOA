@@ -35,27 +35,31 @@ extension ConfigProfileController {
         try stateLock.withLock {
             try ensureStore()
 
-            let codexAuth = readAuthJSON(from: codexAuthURL)
-            if hasOfficialAuthSession(codexAuth) {
-                _ = try saveCurrentOfficialLogin(activate: false)
+            return try withCodexStateTransaction(
+                files: [moaConfigURL, codexConfigURL, moaAuthURL, codexAuthURL, databaseURL, officialAccountsDatabaseURL],
+                includeOfficialAuthDirectory: true
+            ) {
+                let codexAuth = readAuthJSON(from: codexAuthURL)
+                if hasOfficialAuthSession(codexAuth) {
+                    _ = try saveCurrentOfficialLogin(activate: false)
+                }
+
+                try backupCodexFiles()
+                try writeAuthJSON(Self.noAccountAuthJSON(), to: moaAuthURL)
+                try writeAuthJSON(Self.noAccountAuthJSON(), to: codexAuthURL)
+
+                var officialDatabase = try loadOfficialAccountDatabaseHydratingEmails()
+                officialDatabase.selectedAccountID = nil
+                try saveOfficialAccountDatabase(officialDatabase)
+
+                let currentConfig = try syncedMoaConfig()
+                var profileDatabase = try loadDatabase()
+                let nextConfig = try noAccountConfig(from: currentConfig, profileDatabase: &profileDatabase)
+                try writeText(nextConfig, to: moaConfigURL)
+                try writeText(nextConfig, to: codexConfigURL)
+                try saveDatabase(profileDatabase)
+                return nil
             }
-
-            try backupCodexFiles()
-            try writeAuthJSON(Self.noAccountAuthJSON(), to: moaAuthURL)
-            try writeAuthJSON(Self.noAccountAuthJSON(), to: codexAuthURL)
-
-            var officialDatabase = try loadOfficialAccountDatabaseHydratingEmails()
-            officialDatabase.selectedAccountID = nil
-            try saveOfficialAccountDatabase(officialDatabase)
-
-            let currentConfig = try syncedMoaConfig()
-            var profileDatabase = try loadDatabase()
-            let nextConfig = try noAccountConfig(from: currentConfig, profileDatabase: &profileDatabase)
-            try writeText(nextConfig, to: moaConfigURL)
-            try writeText(nextConfig, to: codexConfigURL)
-            try saveDatabase(profileDatabase)
-
-            return nil
         }
     }
 
@@ -85,53 +89,60 @@ extension ConfigProfileController {
     @discardableResult
     func saveOfficialAccount(auth: [String: Any], selecting id: String, activate: Bool = true) throws -> CodexOfficialAccount {
         try stateLock.withLock {
-            try backupCodexFiles()
+            return try withCodexStateTransaction(
+                files: [moaAuthURL, codexAuthURL, officialAccountsDatabaseURL],
+                includeOfficialAuthDirectory: true
+            ) {
+                try backupCodexFiles()
+                var officialDatabase = try loadOfficialAccountDatabase()
+                guard let index = officialDatabase.accounts.firstIndex(where: { $0.id == id }) else {
+                    throw CodexOfficialAccountError.accountNotFound
+                }
 
-            var officialDatabase = try loadOfficialAccountDatabase()
-            guard let index = officialDatabase.accounts.firstIndex(where: { $0.id == id }) else {
-                throw CodexOfficialAccountError.accountNotFound
-            }
+                var account = officialDatabase.accounts[index]
+                account.email = officialAuthEmail(from: auth) ?? account.email
+                account.lastUsedAt = Self.isoTimestamp()
+                officialDatabase.accounts[index] = account
+                if activate {
+                    officialDatabase.selectedAccountID = account.id
+                }
 
-            var account = officialDatabase.accounts[index]
-            account.email = officialAuthEmail(from: auth) ?? account.email
-            account.lastUsedAt = Self.isoTimestamp()
-            officialDatabase.accounts[index] = account
-            if activate {
-                officialDatabase.selectedAccountID = account.id
+                try writeAuthJSON(auth, to: try officialAuthURL(for: account))
+                if activate {
+                    try writeAuthJSON(auth, to: moaAuthURL)
+                    try copyFile(from: moaAuthURL, to: codexAuthURL)
+                }
+                try saveOfficialAccountDatabase(officialDatabase)
+                return account
             }
-
-            try writeAuthJSON(auth, to: officialAuthURL(for: account))
-            if activate {
-                try writeAuthJSON(auth, to: moaAuthURL)
-                try copyFile(from: moaAuthURL, to: codexAuthURL)
-            }
-            try saveOfficialAccountDatabase(officialDatabase)
-            return account
         }
     }
 
     @discardableResult
     func saveNewOfficialAccount(auth: [String: Any], name: String, activate: Bool = true) throws -> CodexOfficialAccount {
         try stateLock.withLock {
-            try backupCodexFiles()
+            return try withCodexStateTransaction(
+                files: [moaAuthURL, codexAuthURL, officialAccountsDatabaseURL],
+                includeOfficialAuthDirectory: true
+            ) {
+                try backupCodexFiles()
+                var officialDatabase = try loadOfficialAccountDatabase()
+                let email = officialAuthEmail(from: auth)
+                let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                let accountName = CodexOfficialAccount.isDefaultDisplayName(trimmedName) ? (email ?? trimmedName) : trimmedName
+                var account = makeOfficialAccount(name: accountName, email: email)
 
-            var officialDatabase = try loadOfficialAccountDatabase()
-            let email = officialAuthEmail(from: auth)
-            let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-            let accountName = CodexOfficialAccount.isDefaultDisplayName(trimmedName) ? (email ?? trimmedName) : trimmedName
-            var account = makeOfficialAccount(name: accountName, email: email)
-
-            try writeAuthJSON(auth, to: officialAuthURL(for: account))
-
-            account.lastUsedAt = Self.isoTimestamp()
-            officialDatabase.accounts.append(account)
-            if activate {
-                try writeAuthJSON(auth, to: moaAuthURL)
-                try copyFile(from: moaAuthURL, to: codexAuthURL)
-                officialDatabase.selectedAccountID = account.id
+                try writeAuthJSON(auth, to: try officialAuthURL(for: account))
+                account.lastUsedAt = Self.isoTimestamp()
+                officialDatabase.accounts.append(account)
+                if activate {
+                    try writeAuthJSON(auth, to: moaAuthURL)
+                    try copyFile(from: moaAuthURL, to: codexAuthURL)
+                    officialDatabase.selectedAccountID = account.id
+                }
+                try saveOfficialAccountDatabase(officialDatabase)
+                return account
             }
-            try saveOfficialAccountDatabase(officialDatabase)
-            return account
         }
     }
 
@@ -161,33 +172,33 @@ extension ConfigProfileController {
     func applyOfficialAccount(id: String) throws -> CodexOfficialAccount {
         try stateLock.withLock {
             try ensureStore()
+            return try withCodexStateTransaction(
+                files: [moaAuthURL, codexAuthURL, officialAccountsDatabaseURL],
+                includeOfficialAuthDirectory: true
+            ) {
+                try syncMoaAuthSessionFromCodex(updateSelectedOfficialAccount: true)
+                var officialDatabase = try loadOfficialAccountDatabase()
+                guard let index = officialDatabase.accounts.firstIndex(where: { $0.id == id }) else {
+                    throw CodexOfficialAccountError.accountNotFound
+                }
+                try backupCodexFiles()
 
-            try syncMoaAuthSessionFromCodex(updateSelectedOfficialAccount: true)
+                var account = officialDatabase.accounts[index]
+                let authURL = try officialAuthURL(for: account)
+                let auth = readAuthJSON(from: authURL)
+                guard fileManager.fileExists(atPath: authURL.path), hasOfficialAuthSession(auth) else {
+                    throw CodexOfficialAccountError.noCurrentLogin
+                }
 
-            var officialDatabase = try loadOfficialAccountDatabase()
-            guard let index = officialDatabase.accounts.firstIndex(where: { $0.id == id }) else {
-                throw CodexOfficialAccountError.accountNotFound
+                try copyFile(from: authURL, to: moaAuthURL)
+                try copyFile(from: authURL, to: codexAuthURL)
+                account.email = officialAuthEmail(from: auth) ?? account.email
+                account.lastUsedAt = Self.isoTimestamp()
+                officialDatabase.accounts[index] = account
+                officialDatabase.selectedAccountID = account.id
+                try saveOfficialAccountDatabase(officialDatabase)
+                return account
             }
-            try backupCodexFiles()
-
-            var account = officialDatabase.accounts[index]
-            let authURL = officialAuthURL(for: account)
-            let auth = readAuthJSON(from: authURL)
-            guard fileManager.fileExists(atPath: authURL.path),
-                  hasOfficialAuthSession(auth)
-            else {
-                throw CodexOfficialAccountError.noCurrentLogin
-            }
-
-            try copyFile(from: authURL, to: moaAuthURL)
-            try copyFile(from: authURL, to: codexAuthURL)
-
-            account.email = officialAuthEmail(from: auth) ?? account.email
-            account.lastUsedAt = Self.isoTimestamp()
-            officialDatabase.accounts[index] = account
-            officialDatabase.selectedAccountID = account.id
-            try saveOfficialAccountDatabase(officialDatabase)
-            return account
         }
     }
 
@@ -225,39 +236,43 @@ extension ConfigProfileController {
     func deleteSelectedOfficialAccount() throws -> DeletedOfficialAccountResult {
         try stateLock.withLock {
             try ensureStore()
+            return try withCodexStateTransaction(
+                files: [moaAuthURL, codexAuthURL, officialAccountsDatabaseURL],
+                includeOfficialAuthDirectory: true
+            ) {
+                try syncMoaAuthSessionFromCodex(updateSelectedOfficialAccount: true)
+                var database = try loadOfficialAccountDatabaseHydratingEmails()
+                guard let selectedID = database.selectedAccountID else {
+                    throw CodexOfficialAccountError.noSelectedAccount
+                }
+                guard let index = database.accounts.firstIndex(where: { $0.id == selectedID }) else {
+                    throw CodexOfficialAccountError.accountNotFound
+                }
 
-            try syncMoaAuthSessionFromCodex(updateSelectedOfficialAccount: true)
+                try backupCodexFiles()
+                let deleted = database.accounts.remove(at: index)
+                let deletedAuthURL = try officialAuthURL(for: deleted)
+                try? fileManager.removeItem(at: deletedAuthURL)
 
-            var database = try loadOfficialAccountDatabaseHydratingEmails()
-            guard let selectedID = database.selectedAccountID else {
-                throw CodexOfficialAccountError.noSelectedAccount
+                let activated: CodexOfficialAccount?
+                if database.accounts.isEmpty {
+                    database.selectedAccountID = nil
+                    activated = nil
+                } else {
+                    let nextIndex = min(index, database.accounts.count - 1)
+                    var next = database.accounts[nextIndex]
+                    next.lastUsedAt = Self.isoTimestamp()
+                    database.accounts[nextIndex] = next
+                    database.selectedAccountID = next.id
+                    let nextAuthURL = try officialAuthURL(for: next)
+                    try copyFile(from: nextAuthURL, to: moaAuthURL)
+                    try copyFile(from: nextAuthURL, to: codexAuthURL)
+                    activated = next
+                }
+
+                try saveOfficialAccountDatabase(database)
+                return DeletedOfficialAccountResult(deleted: deleted, activated: activated)
             }
-            guard let index = database.accounts.firstIndex(where: { $0.id == selectedID }) else {
-                throw CodexOfficialAccountError.accountNotFound
-            }
-
-            try backupCodexFiles()
-
-            let deleted = database.accounts.remove(at: index)
-            try? fileManager.removeItem(at: officialAuthURL(for: deleted))
-
-            let activated: CodexOfficialAccount?
-            if database.accounts.isEmpty {
-                database.selectedAccountID = nil
-                activated = nil
-            } else {
-                let nextIndex = min(index, database.accounts.count - 1)
-                var next = database.accounts[nextIndex]
-                next.lastUsedAt = Self.isoTimestamp()
-                database.accounts[nextIndex] = next
-                database.selectedAccountID = next.id
-                try copyFile(from: officialAuthURL(for: next), to: moaAuthURL)
-                try copyFile(from: officialAuthURL(for: next), to: codexAuthURL)
-                activated = next
-            }
-
-            try saveOfficialAccountDatabase(database)
-            return DeletedOfficialAccountResult(deleted: deleted, activated: activated)
         }
     }
     func makeOfficialAccount(name: String, email: String? = nil) -> CodexOfficialAccount {
@@ -273,8 +288,34 @@ extension ConfigProfileController {
         )
     }
 
-    func officialAuthURL(for account: CodexOfficialAccount) -> URL {
-        moaHome.appendingPathComponent(account.authPath)
+    func officialAuthURL(for account: CodexOfficialAccount) throws -> URL {
+        let expectedPath = "\(Self.officialAuthAccountsRelativePath)/\(account.id).json"
+        guard account.authPath == expectedPath,
+              UUID(uuidString: account.id) != nil
+        else {
+            throw CodexOfficialAccountError.invalidAuthPath(account.authPath)
+        }
+
+        let codexAuthDirectory = moaHome.appendingPathComponent("codex-auth", isDirectory: true).standardizedFileURL
+        let base = officialAuthAccountsDir.standardizedFileURL
+        for directory in [codexAuthDirectory, base] {
+            if (try? directory.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true {
+                throw CodexOfficialAccountError.invalidAuthPath(account.authPath)
+            }
+        }
+        let candidate = moaHome
+            .appendingPathComponent(account.authPath)
+            .standardizedFileURL
+        if (try? candidate.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true {
+            throw CodexOfficialAccountError.invalidAuthPath(account.authPath)
+        }
+        let basePath = base.path.hasSuffix("/") ? base.path : base.path + "/"
+        guard candidate.deletingLastPathComponent() == base,
+              candidate.path.hasPrefix(basePath)
+        else {
+            throw CodexOfficialAccountError.invalidAuthPath(account.authPath)
+        }
+        return candidate
     }
 
     func preferredCurrentOfficialAuth() -> [String: Any] {
@@ -300,7 +341,7 @@ extension ConfigProfileController {
         let currentEmail = officialAuthEmail(from: auth)
 
         for account in database.accounts {
-            let savedAuth = readAuthJSON(from: officialAuthURL(for: account))
+            let savedAuth = readAuthJSON(from: try officialAuthURL(for: account))
             if let refreshToken, officialAuthRefreshToken(from: savedAuth) == refreshToken {
                 return account.withEmailIfAvailable(officialAuthEmail(from: savedAuth) ?? currentEmail)
             }
@@ -316,7 +357,7 @@ extension ConfigProfileController {
 
         if let currentEmail {
             for account in database.accounts {
-                let savedAuth = readAuthJSON(from: officialAuthURL(for: account))
+                let savedAuth = readAuthJSON(from: try officialAuthURL(for: account))
                 let savedEmail = officialAuthEmail(from: savedAuth) ?? account.email
                 if savedEmail?.caseInsensitiveCompare(currentEmail) == .orderedSame {
                     return account.withEmailIfAvailable(currentEmail)
@@ -346,7 +387,7 @@ extension ConfigProfileController {
         var changed = false
 
         for index in database.accounts.indices {
-            let auth = readAuthJSON(from: officialAuthURL(for: database.accounts[index]))
+            let auth = readAuthJSON(from: try officialAuthURL(for: database.accounts[index]))
             guard let email = officialAuthEmail(from: auth),
                   database.accounts[index].email != email
             else {

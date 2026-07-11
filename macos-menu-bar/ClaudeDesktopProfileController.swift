@@ -105,6 +105,10 @@ final class ClaudeDesktopProfileController {
     private let metaURL: URL
     private let stateLock = NSRecursiveLock()
 
+    #if MOA_TESTING
+    static var testingDatabaseSaveFailuresRemaining = 0
+    #endif
+
     private var moaHome: URL {
         MoaDataRoot.currentURL(environment: environment)
     }
@@ -212,12 +216,16 @@ final class ClaudeDesktopProfileController {
             }
 
             let profile = database.profiles.remove(at: index)
-            if database.selectedProfileID == id {
-                try restoreOfficialFiles()
+            let wasSelected = database.selectedProfileID == id
+            if wasSelected {
                 database.selectedProfileID = nil
             }
 
-            try saveDatabase(database)
+            try withStateTransaction(database: database) {
+                if wasSelected {
+                    try writeOfficialFiles()
+                }
+            }
             return profile
         }
     }
@@ -309,16 +317,14 @@ final class ClaudeDesktopProfileController {
                 models: profile.models,
                 oneMModels: profile.enabledOneMModels
             )
-            try withRollback {
+            database.profiles[index] = profile
+            database.selectedProfileID = profile.id
+            try withStateTransaction(database: database) {
                 try writeDeploymentMode(to: normalConfigURL, mode: "3p")
                 try writeDeploymentMode(to: threePConfigURL, mode: "3p")
                 try writeGatewayProfile(profile)
                 try writeMeta(appliedProfileID: Self.profileID)
             }
-
-            database.profiles[index] = profile
-            database.selectedProfileID = profile.id
-            try saveDatabase(database)
             return profile
         }
     }
@@ -327,9 +333,10 @@ final class ClaudeDesktopProfileController {
         try stateLock.withLock {
             try ensureStore()
             var database = try loadDatabase()
-            try restoreOfficialFiles()
             database.selectedProfileID = nil
-            try saveDatabase(database)
+            try withStateTransaction(database: database) {
+                try writeOfficialFiles()
+            }
         }
     }
 
@@ -396,25 +403,38 @@ final class ClaudeDesktopProfileController {
 
     private var cachedDatabase: ClaudeDesktopProviderDatabase?
     private var cachedDatabaseModified: Date?
+    private var cachedDatabaseURLPath: String?
 
     private func loadDatabase() throws -> ClaudeDesktopProviderDatabase {
         try stateLock.withLock {
             try ensureStoreIfMissingOnly()
             let modified = (try? fileManager.attributesOfItem(atPath: databaseURL.path))?[.modificationDate] as? Date
             if let cachedDatabase, let cachedDatabaseModified, let modified,
-               cachedDatabaseModified == modified {
+               cachedDatabaseModified == modified,
+               cachedDatabaseURLPath == databaseURL.standardizedFileURL.path {
                 return cachedDatabase
             }
             let data = try Data(contentsOf: databaseURL)
             let database = try JSONDecoder().decode(ClaudeDesktopProviderDatabase.self, from: data)
             cachedDatabase = database
             cachedDatabaseModified = modified
+            cachedDatabaseURLPath = databaseURL.standardizedFileURL.path
             return database
         }
     }
 
     private func saveDatabase(_ database: ClaudeDesktopProviderDatabase) throws {
         try stateLock.withLock {
+            #if MOA_TESTING
+            if Self.testingDatabaseSaveFailuresRemaining > 0 {
+                Self.testingDatabaseSaveFailuresRemaining -= 1
+                throw NSError(
+                    domain: "MoaTests",
+                    code: 500,
+                    userInfo: [NSLocalizedDescriptionKey: "Injected Claude profile database save failure."]
+                )
+            }
+            #endif
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let data = try encoder.encode(database)
@@ -422,6 +442,7 @@ final class ClaudeDesktopProfileController {
             try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: databaseURL.path)
             cachedDatabase = database
             cachedDatabaseModified = (try? fileManager.attributesOfItem(atPath: databaseURL.path))?[.modificationDate] as? Date
+            cachedDatabaseURLPath = databaseURL.standardizedFileURL.path
         }
     }
 
@@ -431,16 +452,14 @@ final class ClaudeDesktopProfileController {
         }
     }
 
-    private func restoreOfficialFiles() throws {
-        try withRollback {
-            try writeDeploymentMode(to: normalConfigURL, mode: "1p")
-            try writeDeploymentMode(to: threePConfigURL, mode: "1p")
-            try removeMoaEnterpriseConfig(from: threePConfigURL)
-            if fileManager.fileExists(atPath: profileURL.path) {
-                try fileManager.removeItem(at: profileURL)
-            }
-            try writeMeta(appliedProfileID: nil)
+    private func writeOfficialFiles() throws {
+        try writeDeploymentMode(to: normalConfigURL, mode: "1p")
+        try writeDeploymentMode(to: threePConfigURL, mode: "1p")
+        try removeMoaEnterpriseConfig(from: threePConfigURL)
+        if fileManager.fileExists(atPath: profileURL.path) {
+            try fileManager.removeItem(at: profileURL)
         }
+        try writeMeta(appliedProfileID: nil)
     }
 
     @discardableResult
@@ -474,27 +493,41 @@ final class ClaudeDesktopProfileController {
         try MoaProviderBaseURLPolicy.validate(raw).normalizedString
     }
 
-    private func withRollback(_ operation: () throws -> Void) throws {
-        let snapshots = try snapshotClaudeFiles()
+    private func withStateTransaction(
+        database: ClaudeDesktopProviderDatabase,
+        operation: () throws -> Void
+    ) throws {
+        let snapshots = try snapshotStateFiles()
+        let cachedDatabaseBefore = cachedDatabase
+        let cachedDatabaseModifiedBefore = cachedDatabaseModified
+        let cachedDatabaseURLPathBefore = cachedDatabaseURLPath
         do {
             try operation()
-        } catch {
+            try saveDatabase(database)
+        } catch let operationError {
             do {
                 try restoreSnapshots(snapshots)
-            } catch {
+                cachedDatabase = cachedDatabaseBefore
+                cachedDatabaseModified = cachedDatabaseModifiedBefore
+                cachedDatabaseURLPath = cachedDatabaseURLPathBefore
+            } catch let rollbackError {
                 throw NSError(
                     domain: "Moa",
                     code: 500,
-                    userInfo: [NSLocalizedDescriptionKey: MoaL10n.format("Claude Desktop config write failed, and rollback also failed: %@", error.localizedDescription)]
+                    userInfo: [NSLocalizedDescriptionKey: MoaL10n.format(
+                        "Claude Desktop state update failed (%@), and rollback also failed: %@",
+                        operationError.localizedDescription,
+                        rollbackError.localizedDescription
+                    )]
                 )
             }
 
-            throw error
+            throw operationError
         }
     }
 
-    private func snapshotClaudeFiles() throws -> [FileSnapshot] {
-        try [normalConfigURL, threePConfigURL, profileURL, metaURL].map { url in
+    private func snapshotStateFiles() throws -> [FileSnapshot] {
+        try [normalConfigURL, threePConfigURL, profileURL, metaURL, databaseURL].map { url in
             let content = fileManager.fileExists(atPath: url.path) ? try Data(contentsOf: url) : nil
             return FileSnapshot(url: url, content: content)
         }

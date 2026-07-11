@@ -289,3 +289,10 @@
 "ZCode" = "ZCode";
 "ZCode Official Mode" = "ZCode 官方模式";
 "ZCode reopened" = "ZCode 已重启";
+"Claude Desktop state update failed (%@), and rollback also failed: %@" = "Claude Desktop 状态更新失败（%@），回滚也失败：%@";
+"Codex state update failed (%@), and rollback also failed: %@" = "Codex 状态更新失败（%@），回滚也失败：%@";
+"Data replacement failed (%@), and the previous data could not be restored (%@). The previous data is preserved at %@." = "数据替换失败（%@），且无法恢复原数据（%@）。原数据已保留在 %@。";
+"Provider bridge port must be between 0 and 65535 (received %lld)." = "Provider Bridge 端口必须在 0 到 65535 之间（收到 %lld）。";
+"The saved Codex official account path is invalid: %@" = "已保存的 Codex 官方账号路径无效：%@";
+"Load Failed" = "加载失败";
+"Unable to load %@ data: %@" = "无法加载 %@ 数据：%@";

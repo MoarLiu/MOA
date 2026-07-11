@@ -1305,7 +1305,7 @@ enum MoaUsagePricing {
     private static let fallbackClaudePricingModel = "claude-opus-4-7"
     private static let fallbackZCodePricingModel = "GLM-5.2"
     private static let catalogStoreLock = NSLock()
-    private static var catalogStore = MoaUsagePricingCatalogStore.shared
+    nonisolated(unsafe) private static var catalogStore = MoaUsagePricingCatalogStore.shared
 
     private struct CodexPricing {
         let inputCostPerToken: Double
@@ -2015,12 +2015,12 @@ final class CodexUsageRefreshMenuView: NSView {
 
 private enum CodexUsageDateParser {
     private static let lock = NSLock()
-    private static let fractional: ISO8601DateFormatter = {
+    nonisolated(unsafe) private static let fractional: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
     }()
-    private static let plain: ISO8601DateFormatter = {
+    nonisolated(unsafe) private static let plain: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         return formatter

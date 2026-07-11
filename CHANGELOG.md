@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.7 - 2026-07-12
+
+- Made Codex and Claude Desktop profile changes transactional so live configuration, account files, and selected state roll back together after a failed write.
+- Preserved TOML multiline strings during structural edits, hardened recursive legacy-data migration and data-package integrity checks, and rejected invalid Provider Bridge ports and Codex account paths.
+- Improved updater handoff cleanup, Provider Bridge streaming completion order, menu load-error visibility, and large ZCode usage-query output handling.
+- Expanded regression coverage and made local build and test scripts reliably select a full Xcode toolchain when SwiftUI macros require it.
+
 ## 1.1.6 - 2026-07-10
 
 - Refreshed GPT-5.6 pricing, adding Sol, Terra, and Luna with current standard, long-context, cached-input, and Priority rates.

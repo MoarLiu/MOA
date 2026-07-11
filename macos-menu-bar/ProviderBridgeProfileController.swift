@@ -68,6 +68,7 @@ final class ProviderBridgeProfileController {
                 if profile.bridgePort == nil {
                     profile.bridgePort = MoaProviderBridgeDefaults.defaultPort
                 }
+                profile.bridgePort = try MoaProviderBridgePort.validated(profile.resolvedBridgePort)
 
                 importedIDs.insert(profile.id)
                 guard !existingIDs.contains(profile.id) else {
@@ -139,6 +140,7 @@ final class ProviderBridgeProfileController {
             guard let profile = database.profiles.first(where: { $0.id == id }) else {
                 throw NSError(domain: "Moa", code: 404, userInfo: [NSLocalizedDescriptionKey: MoaL10n.text("Provider Bridge profile not found.")])
             }
+            _ = try MoaProviderBridgePort.validated(profile.resolvedBridgePort)
 
             database.selectedProfileID = id
             try saveDatabase(database)
@@ -156,7 +158,7 @@ final class ProviderBridgeProfileController {
                 throw NSError(domain: "Moa", code: 404, userInfo: [NSLocalizedDescriptionKey: MoaL10n.text("Provider Bridge profile not found.")])
             }
             if let port {
-                database.profiles[index].bridgePort = port
+                database.profiles[index].bridgePort = try MoaProviderBridgePort.validated(port)
             }
             if let token {
                 database.profiles[index].bridgeToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -208,25 +210,29 @@ final class ProviderBridgeProfileController {
 
     private var cachedDatabase: ProfileDatabase?
     private var cachedDatabaseModified: Date?
+    private var cachedDatabaseURLPath: String?
 
     private func loadDatabase() throws -> ProfileDatabase {
         try stateLock.withLock {
             try ensureStoreIfMissingOnly()
             let modified = (try? fileManager.attributesOfItem(atPath: databaseURL.path))?[.modificationDate] as? Date
             if let cachedDatabase, let cachedDatabaseModified, let modified,
-               cachedDatabaseModified == modified {
+               cachedDatabaseModified == modified,
+               cachedDatabaseURLPath == databaseURL.standardizedFileURL.path {
                 return cachedDatabase
             }
             let data = try Data(contentsOf: databaseURL)
             let database = try JSONDecoder().decode(ProfileDatabase.self, from: data)
             cachedDatabase = database
             cachedDatabaseModified = modified
+            cachedDatabaseURLPath = databaseURL.standardizedFileURL.path
             return database
         }
     }
 
     private func saveDatabase(_ database: ProfileDatabase) throws {
         try stateLock.withLock {
+            try database.profiles.compactMap(\.bridgePort).forEach { _ = try MoaProviderBridgePort.validated($0) }
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let data = try encoder.encode(database)
@@ -234,6 +240,7 @@ final class ProviderBridgeProfileController {
             try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: databaseURL.path)
             cachedDatabase = database
             cachedDatabaseModified = (try? fileManager.attributesOfItem(atPath: databaseURL.path))?[.modificationDate] as? Date
+            cachedDatabaseURLPath = databaseURL.standardizedFileURL.path
         }
     }
 

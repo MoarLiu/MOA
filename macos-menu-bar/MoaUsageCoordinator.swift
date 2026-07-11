@@ -43,12 +43,12 @@ final class MoaUsageCoordinator {
         codexScanner: CodexUsageScanner = CodexUsageScanner(),
         claudeScanner: ClaudeUsageScanner = ClaudeUsageScanner(),
         zcodeScanner: ZCodeUsageScanner = ZCodeUsageScanner(),
-        pricingUpdateCoordinator: MoaUsagePricingUpdateCoordinator = MoaUsagePricingUpdateCoordinator()
+        pricingUpdateCoordinator: MoaUsagePricingUpdateCoordinator? = nil
     ) {
         self.codexScanner = codexScanner
         self.claudeScanner = claudeScanner
         self.zcodeScanner = zcodeScanner
-        self.pricingUpdateCoordinator = pricingUpdateCoordinator
+        self.pricingUpdateCoordinator = pricingUpdateCoordinator ?? MoaUsagePricingUpdateCoordinator()
     }
 
     func start() {

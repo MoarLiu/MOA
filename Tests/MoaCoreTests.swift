@@ -35,16 +35,22 @@ private enum MoaCoreTests {
     static func main() {
         let tests: [(String, () throws -> Void)] = [
             ("data root paths are Moa scoped", testDataRootPaths),
+            ("profile caches distinguish data root paths", testProfileCacheDistinguishesDataRoots),
             ("legacy Moa-Lite local data migrates without overwrite", testLegacyMoaLiteLocalDataMigration),
             ("legacy Moa-Lite iCloud data migrates to Moa", testLegacyMoaLiteICloudDataMigration),
+            ("legacy nested iCloud directories merge recursively", testLegacyNestedICloudDirectoryMigration),
+            ("recursive migration does not follow destination symlinks", testRecursiveMigrationRejectsDestinationSymlinks),
             ("provider bridge defaults use Moa port", testProviderBridgeDefaultPort),
             ("Codex bridge provider IDs use Moa prefix", testCodexBridgeProviderIDs),
+            ("TOML multiline strings survive structural edits", testTomlMultilineStringsSurviveStructuralEdits),
+            ("Fast state TOML edits preserve multiline strings", testFastStateTomlMultilineStrings),
             ("official restore keeps selected provider identity", testOfficialRestoreKeepsSelectedProviderIdentity),
             ("official restore strips selected direct provider credentials", testOfficialRestoreStripsSelectedDirectProviderCredentials),
             ("Codex session provider migration requires current provider", testCodexSessionProviderMigrationRequiresCurrentProvider),
             ("Codex session provider migration updates JSONL and SQLite", testCodexSessionProviderMigrationUpdatesJSONLAndSQLite),
             ("Codex session provider migration rolls back on failure", testCodexSessionProviderMigrationRollsBackOnFailure),
             ("official account displays email from auth token", testOfficialAccountDisplaysEmailFromAuthToken),
+            ("official account auth paths stay contained", testOfficialAccountAuthPathValidation),
             ("official no-account mode preserves third-party config without login", testOfficialNoAccountPreservesThirdPartyConfigWithoutLogin),
             ("official no-account mode captures current login without selecting it", testOfficialNoAccountCapturesCurrentLoginWithoutSelectingIt),
             ("official no-account mode selects first direct config when none selected", testOfficialNoAccountSelectsFirstDirectConfigWhenNoneSelected),
@@ -57,7 +63,14 @@ private enum MoaCoreTests {
             ("remote pricing catalog parses, merges, and overrides fallback", testRemotePricingCatalog),
             ("pricing updater schedules the daily local check", testPricingUpdateSchedule),
             ("ZCode GLM pricing is estimated from usage tokens", testZCodePricing),
-            ("ZCode usage scanner aggregates local SQLite usage", testZCodeUsageScanner)
+            ("ZCode usage scanner aggregates local SQLite usage", testZCodeUsageScanner),
+            ("provider bridge ports reject invalid boundaries", testProviderBridgePortValidation),
+            ("provider bridge streaming usage precedes completion", testProviderBridgeStreamingUsageOrder),
+            ("Claude live files and selected state roll back together", testClaudeStateTransactionRollback),
+            ("Codex profile state rolls back together", testCodexStateTransactionRollback),
+            ("Codex official account state rolls back together", testCodexOfficialAccountTransactionRollback),
+            ("data packages round trip without temporary leaks", testDataPackageRoundTripAndCleanup),
+            ("ZCode scanner drains large subprocess output", testZCodeUsageScannerLargeOutput)
         ]
 
         var failures: [String] = []
@@ -87,6 +100,44 @@ private enum MoaCoreTests {
         try expect(MoaDataRoot.iCloudURL(environment: environment).lastPathComponent == "Moa", "iCloud folder should be Moa")
         try expect(MoaDataRoot.legacyNestedICloudURL(environment: environment).lastPathComponent == ".moa", "legacy nested iCloud folder should be .moa")
         try expect(MoaDataRoot.currentURL(environment: environment).path.hasSuffix("/.moa"), "default current root should stay local")
+    }
+
+    private static func testProfileCacheDistinguishesDataRoots() throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let fileManager = FileManager.default
+        let environment = [
+            "HOME": home.path,
+            "CODEX_HOME": home.appendingPathComponent(".codex", isDirectory: true).path
+        ]
+        let controller = ConfigProfileController(environment: environment)
+        _ = try controller.profiles()
+
+        let localRoot = MoaDataRoot.localURL(environment: environment)
+        let cloudRoot = MoaDataRoot.iCloudURL(environment: environment)
+        try fileManager.createDirectory(at: cloudRoot.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fileManager.copyItem(at: localRoot, to: cloudRoot)
+        let cloudProfile = ConfigProfile(
+            id: UUID().uuidString,
+            name: "Cloud Profile",
+            baseURL: "https://cloud.example/v1",
+            apiKey: "cloud-key"
+        )
+        let cloudDatabase = ProfileDatabase(selectedProfileID: cloudProfile.id, profiles: [cloudProfile])
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let cloudDatabaseURL = cloudRoot.appendingPathComponent("profiles.json")
+        try encoder.encode(cloudDatabase).write(to: cloudDatabaseURL, options: .atomic)
+        let sharedModified = Date(timeIntervalSince1970: 1_700_000_000)
+        try fileManager.setAttributes([.modificationDate: sharedModified], ofItemAtPath: controller.databaseURL.path)
+        _ = try controller.profiles()
+        try fileManager.setAttributes([.modificationDate: sharedModified], ofItemAtPath: cloudDatabaseURL.path)
+
+        let support = MoaDataRoot.supportDirectory(environment: environment)
+        try fileManager.createDirectory(at: support, withIntermediateDirectories: true)
+        try Data().write(to: support.appendingPathComponent("icloud-data-root-enabled"))
+        let cloudProfiles = try controller.profiles()
+        try expect(cloudProfiles.map(\.id) == [cloudProfile.id], "cache lookup must include the active data-root path, not only mtime")
     }
 
     private static func testLegacyMoaLiteLocalDataMigration() throws {
@@ -136,6 +187,12 @@ private enum MoaCoreTests {
         try fileManager.createDirectory(at: oldICloud, withIntermediateDirectories: true)
         try Data().write(to: oldSupport.appendingPathComponent("icloud-data-root-enabled"))
         try "icloud".write(to: oldICloud.appendingPathComponent("profiles.json"), atomically: true, encoding: .utf8)
+        let existingAccounts = oldICloud.appendingPathComponent("codex-auth/accounts", isDirectory: true)
+        let nestedAccounts = oldICloud.appendingPathComponent(".moa-lite/codex-auth/accounts", isDirectory: true)
+        try fileManager.createDirectory(at: existingAccounts, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: nestedAccounts, withIntermediateDirectories: true)
+        try "existing".write(to: existingAccounts.appendingPathComponent("existing.json"), atomically: true, encoding: .utf8)
+        try "missing".write(to: nestedAccounts.appendingPathComponent("missing.json"), atomically: true, encoding: .utf8)
 
         let migrated = try MoaDataRoot.migrateLegacyMoaLiteRootsIfNeeded(environment: environment)
         let newSupport = MoaDataRoot.supportDirectory(environment: environment)
@@ -144,7 +201,82 @@ private enum MoaCoreTests {
         try expect(fileManager.fileExists(atPath: newSupport.appendingPathComponent("icloud-data-root-enabled").path), "iCloud state should migrate to Moa support directory")
         let migratedICloudProfileData = try String(contentsOf: newICloud.appendingPathComponent("profiles.json"), encoding: .utf8)
         try expect(migratedICloudProfileData == "icloud", "legacy iCloud data should copy to iCloud Drive/Moa")
+        let copiedAfterMigration = try MoaDataRoot.copyMissingContents(
+            from: newICloud.appendingPathComponent(".moa-lite", isDirectory: true),
+            to: newICloud,
+            fileManager: fileManager
+        )
+        try expect(
+            fileManager.fileExists(atPath: newICloud.appendingPathComponent("codex-auth/accounts/missing.json").path),
+            "legacy nested migration should descend into existing destination directories"
+        )
+        try expect(!copiedAfterMigration, "the migration itself should merge nested content without a second pass")
         try expect(MoaDataRoot.currentURL(environment: environment).lastPathComponent == "Moa", "current root should use migrated Moa iCloud folder")
+    }
+
+    private static func testLegacyNestedICloudDirectoryMigration() throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let fileManager = FileManager.default
+        let environment = ["HOME": home.path]
+        let cloudRoot = MoaDataRoot.iCloudURL(environment: environment)
+        let nestedRoot = MoaDataRoot.legacyNestedICloudURL(environment: environment)
+        try fileManager.createDirectory(at: cloudRoot.appendingPathComponent("codex-auth/accounts"), withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: nestedRoot.appendingPathComponent("codex-auth/accounts"), withIntermediateDirectories: true)
+        try "authoritative".write(
+            to: cloudRoot.appendingPathComponent("codex-auth/accounts/existing.json"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "legacy".write(
+            to: nestedRoot.appendingPathComponent("codex-auth/accounts/missing.json"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let support = MoaDataRoot.supportDirectory(environment: environment)
+        try fileManager.createDirectory(at: support, withIntermediateDirectories: true)
+        try Data().write(to: support.appendingPathComponent("icloud-data-root-enabled"))
+
+        let controller = MoaDataPackageController(environment: environment)
+        let repaired = try controller.repairLegacyICloudDataSplitIfNeeded()
+        try expect(repaired, "legacy nested directory data should be merged")
+        try expect(
+            fileManager.fileExists(atPath: cloudRoot.appendingPathComponent("codex-auth/accounts/missing.json").path),
+            "nested account files should be copied recursively"
+        )
+        let existing = try String(
+            contentsOf: cloudRoot.appendingPathComponent("codex-auth/accounts/existing.json"),
+            encoding: .utf8
+        )
+        try expect(existing == "authoritative", "recursive merge must not overwrite current cloud files")
+    }
+
+    private static func testRecursiveMigrationRejectsDestinationSymlinks() throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let fileManager = FileManager.default
+        let source = home.appendingPathComponent("source", isDirectory: true)
+        let destination = home.appendingPathComponent("destination", isDirectory: true)
+        let external = home.appendingPathComponent("external", isDirectory: true)
+        try fileManager.createDirectory(at: source.appendingPathComponent("accounts"), withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: external, withIntermediateDirectories: true)
+        try "legacy".write(
+            to: source.appendingPathComponent("accounts/missing.json"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try fileManager.createSymbolicLink(
+            atPath: destination.appendingPathComponent("accounts").path,
+            withDestinationPath: external.path
+        )
+
+        let copied = try MoaDataRoot.copyMissingContents(from: source, to: destination, fileManager: fileManager)
+        try expect(!copied, "a symlinked destination directory should not be treated as a merge target")
+        try expect(
+            !fileManager.fileExists(atPath: external.appendingPathComponent("missing.json").path),
+            "recursive migration must not copy files through destination symlinks"
+        )
     }
 
     private static func testProviderBridgeDefaultPort() throws {
@@ -193,6 +325,104 @@ private enum MoaCoreTests {
         try expect(ConfigProfileController.providerBridgeModeID == "moa-provider-bridge", "provider bridge mode ID should be Moa scoped")
         try expect(controller.providerID(for: deepSeek, in: "") == "moa-deepseek", "DeepSeek bridge provider ID should use Moa prefix")
         try expect(controller.providerID(for: custom, in: "") == "moa-kimi_chat", "custom bridge provider ID should use Moa prefix")
+    }
+
+    private static func testTomlMultilineStringsSurviveStructuralEdits() throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let controller = ConfigProfileController(environment: [
+            "HOME": home.path,
+            "CODEX_HOME": home.appendingPathComponent(".codex", isDirectory: true).path
+        ])
+        let multilineBlock = #"""
+        instructions = """
+        Keep this text exactly.
+
+
+        [model_providers.moa-not-a-real-table]
+        experimental_bearer_token = "keep-inside-basic-string"
+        """
+        literal_instructions = '''
+        [features]
+        remote_connections = false
+        base_url = "keep-inside-literal-string"
+        '''
+        """#
+        let featureMultilineBlock = #"""
+        feature_note = """
+        remote_connections = false
+
+
+        remote_control = false
+        """
+        """#
+        let config = #"""
+        model_provider = "one"
+        model = "gpt-test"
+
+        """# + multilineBlock + #"""
+
+        [features]
+        remote_connections = true
+        remote_control = true
+        """# + featureMultilineBlock + #"""
+
+        [model_providers.one]
+        name = "One"
+        base_url = "https://one.example/v1"
+        experimental_bearer_token = "remove-real-token"
+        wire_api = "responses"
+        """#
+
+        let profile = ConfigProfile(
+            id: UUID().uuidString,
+            name: "Replacement",
+            baseURL: "https://replacement.example/v1",
+            apiKey: "replacement-token"
+        )
+        let generated = controller.generateConfig(config, selecting: profile)
+        try expect(generated.contains(multilineBlock), "profile generation must preserve multiline basic and literal strings byte-for-byte")
+        try expect(generated.contains(featureMultilineBlock), "feature normalization must preserve multiline content and blank lines")
+        try expect(!generated.contains("https://one.example/v1"), "profile generation should still replace the real provider table")
+
+        let restored = MoaCodexConfigEditor.restoringOfficialMode(from: config)
+        try expect(restored.contains(multilineBlock), "official restore must not interpret table-like multiline content as TOML structure")
+        try expect(!restored.contains("remove-real-token"), "official restore should still remove the real selected provider credential")
+        try expect(restored.contains("keep-inside-basic-string"), "official restore should preserve managed-looking keys inside basic multiline strings")
+        try expect(restored.contains("keep-inside-literal-string"), "official restore should preserve managed-looking keys inside literal multiline strings")
+
+        let remoteConnectionsRemoved = controller.setRemoteConnections(false, in: config)
+        try expect(remoteConnectionsRemoved.contains(featureMultilineBlock), "disabling remote connections must preserve same-named keys inside feature multiline strings")
+        try expect(!remoteConnectionsRemoved.contains("remote_connections = true"), "disabling remote connections should remove the real feature key")
+    }
+
+    private static func testFastStateTomlMultilineStrings() throws {
+        let controller = FastStateController(environment: ["HOME": "/tmp/moa-fast-state-test"])
+        let multilineBlock = #"""
+        instructions = """
+        [features]
+        remote_connections = false
+        remote_control = false
+        """
+        literal = '''
+        [features]
+        remote_connections = true
+        '''
+        """#
+        let config = multilineBlock + #"""
+
+        [features]
+        remote_connections = true
+        remote_control = true
+        """#
+
+        let disabled = controller.setRemoteConnections(false, in: config)
+        try expect(disabled.contains(multilineBlock), "FastStateController must preserve table-like content inside multiline strings")
+        try expect(controller.remoteConnectionsEnabled(in: disabled) == false, "FastStateController should remove the real remote feature keys")
+
+        let enabled = controller.setRemoteConnections(true, in: disabled)
+        try expect(enabled.contains(multilineBlock), "enabling remote connections must also preserve multiline strings")
+        try expect(controller.remoteConnectionsEnabled(in: enabled), "FastStateController should restore both real remote feature keys")
     }
 
     private static func testOfficialRestoreKeepsSelectedProviderIdentity() throws {
@@ -396,7 +626,7 @@ private enum MoaCoreTests {
 
         let codexHome = home.appendingPathComponent(".codex", isDirectory: true)
         try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
-        let email = "cooloosy@outlook.com"
+        let email = "user@example.com"
         let idToken = try testJWT(email: email)
         try """
         {
@@ -427,6 +657,60 @@ private enum MoaCoreTests {
         let renamed = try controller.renameSelectedOfficialAccount(name: "Plus")
         try expect(renamed.displayTitle == "Plus(\(email))", "renamed official account should display name plus email")
         try expect(controller.selectedOfficialAccountName() == "Plus(\(email))", "selected renamed official account should expose name plus email")
+    }
+
+    private static func testOfficialAccountAuthPathValidation() throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let fileManager = FileManager.default
+        let codexHome = home.appendingPathComponent(".codex", isDirectory: true)
+        try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+        let environment = ["HOME": home.path, "CODEX_HOME": codexHome.path]
+        let controller = ConfigProfileController(environment: environment)
+
+        let safe = controller.makeOfficialAccount(name: "Safe")
+        let safeURL = try controller.officialAuthURL(for: safe)
+        try expect(safeURL.deletingLastPathComponent().lastPathComponent == "accounts", "generated auth paths should resolve inside the accounts directory")
+        try expect(safeURL.lastPathComponent == "\(safe.id).json", "generated auth filename should match the account UUID")
+
+        for invalidPath in ["../outside.json", "/tmp/outside.json", "codex-auth/accounts/other.json"] {
+            var invalid = safe
+            invalid.authPath = invalidPath
+            do {
+                _ = try controller.officialAuthURL(for: invalid)
+                throw TestError.failure("invalid official auth path should be rejected: \(invalidPath)")
+            } catch CodexOfficialAccountError.invalidAuthPath {
+                continue
+            }
+        }
+
+        let externalAccounts = home.appendingPathComponent("external-accounts", isDirectory: true)
+        try fileManager.createDirectory(at: externalAccounts, withIntermediateDirectories: true)
+        try fileManager.removeItem(at: controller.officialAuthAccountsDir)
+        try fileManager.createSymbolicLink(
+            atPath: controller.officialAuthAccountsDir.path,
+            withDestinationPath: externalAccounts.path
+        )
+        do {
+            _ = try controller.officialAuthURL(for: safe)
+            throw TestError.failure("a symlinked official account directory should be rejected")
+        } catch CodexOfficialAccountError.invalidAuthPath {
+            try fileManager.removeItem(at: controller.officialAuthAccountsDir)
+            try fileManager.createDirectory(at: controller.officialAuthAccountsDir, withIntermediateDirectories: true)
+        }
+
+        var persistedInvalid = safe
+        persistedInvalid.authPath = "codex-auth/accounts/../outside.json"
+        let database = CodexOfficialAccountDatabase(selectedAccountID: safe.id, accounts: [persistedInvalid])
+        let data = try JSONEncoder().encode(database)
+        try data.write(to: controller.officialAccountsDatabaseURL, options: .atomic)
+        let reloaded = ConfigProfileController(environment: environment)
+        do {
+            _ = try reloaded.selectedOfficialAccountID()
+            throw TestError.failure("persisted invalid official auth path should fail database loading")
+        } catch CodexOfficialAccountError.invalidAuthPath {
+            return
+        }
     }
 
     private static func testOfficialNoAccountPreservesThirdPartyConfigWithoutLogin() throws {
@@ -463,7 +747,7 @@ private enum MoaCoreTests {
         try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
         try thirdPartyConfig.write(to: codexHome.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
 
-        let email = "cooloosy@outlook.com"
+        let email = "user@example.com"
         let idToken = try testJWT(email: email)
         try """
         {
@@ -537,7 +821,7 @@ private enum MoaCoreTests {
         try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
         try thirdPartyConfig.write(to: codexHome.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
 
-        let email = "cooloosy@outlook.com"
+        let email = "user@example.com"
         try authJSON(email: email, refreshToken: "refresh-token-old")
             .write(to: codexHome.appendingPathComponent("auth.json"), atomically: true, encoding: .utf8)
 
@@ -948,6 +1232,318 @@ private enum MoaCoreTests {
         try expect(summary.todayTokens == 1050, "ZCode summary should include today's tokens")
         try expect(summary.totalTokens == 1050, "ZCode summary should include total tokens")
         try expectClose(summary.cacheHitPercent, 19.047619, "ZCode summary should calculate cache hit percentage", tolerance: 0.00001)
+    }
+
+    private static func testProviderBridgePortValidation() throws {
+        let defaultPort = try MoaProviderBridgePort.validated(MoaProviderBridgeDefaults.defaultPort)
+        let automaticPort = try MoaProviderBridgePort.validated(0)
+        let highestPort = try MoaProviderBridgePort.validated(65535)
+        try expect(defaultPort == 19360, "default provider bridge port should be valid")
+        try expect(automaticPort == 0, "port zero should remain available for automatic assignment")
+        try expect(highestPort == 65535, "highest TCP port should be valid")
+
+        for invalid in [-1, 65536, Int.max] {
+            do {
+                _ = try MoaProviderBridgePort.validated(invalid)
+                throw TestError.failure("invalid provider bridge port should be rejected: \(invalid)")
+            } catch MoaProviderBridgePortError.outOfRange {
+                continue
+            }
+        }
+
+        for invalid in [-1, 65536, Int.max] {
+            let json = """
+            {"id":"test","name":"Bridge","baseURL":"https://example.com","bridgePort":\(invalid)}
+            """
+            do {
+                _ = try JSONDecoder().decode(ConfigProfile.self, from: Data(json.utf8))
+                throw TestError.failure("persisted invalid bridge port should fail decoding: \(invalid)")
+            } catch DecodingError.dataCorrupted {
+                continue
+            }
+        }
+
+        let invalidProfile = ConfigProfile(
+            id: UUID().uuidString,
+            name: "Invalid Bridge",
+            baseURL: "https://example.com",
+            apiKey: "key",
+            providerKind: .custom,
+            upstreamProtocol: .chatCompletions,
+            bridgeMode: .localBridge,
+            model: "model",
+            bridgeToken: "token",
+            bridgePort: Int.max
+        )
+        let server = MoaProviderBridgeServer()
+        do {
+            _ = try server.start(configuration: MoaProviderBridgeServerConfiguration(profile: invalidProfile))
+            throw TestError.failure("server should reject Int.max before probing or converting the port")
+        } catch MoaProviderBridgeServerError.invalidPort(let port) {
+            try expect(port == Int.max, "server should report the rejected port")
+        }
+    }
+
+    private static func testProviderBridgeStreamingUsageOrder() throws {
+        let converter = MoaChatSSEToResponsesSSEConverter(model: "test-model")
+        let finishFrames = try converter.ingest(jsonPayload: #"{"choices":[{"delta":{"content":"done"},"finish_reason":"stop"}]}"#)
+        try expect(
+            !finishFrames.joined().contains("response.completed"),
+            "finish_reason must not complete the response before the trailing usage chunk"
+        )
+
+        let usageFrames = try converter.ingest(jsonPayload: #"{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}"#)
+        try expect(usageFrames.joined().contains("response.usage.delta"), "the trailing usage chunk should emit usage before completion")
+
+        let completedFrames = try converter.finish()
+        try expect(completedFrames.joined().contains("response.completed"), "the stream terminator should complete the response")
+        let combined = (finishFrames + usageFrames + completedFrames).joined()
+        guard let usageRange = combined.range(of: "response.usage.delta"),
+              let completedRange = combined.range(of: "response.completed")
+        else {
+            throw TestError.failure("streaming output should contain both usage and completion events")
+        }
+        try expect(usageRange.lowerBound < completedRange.lowerBound, "usage must be emitted before response.completed")
+    }
+
+    private static func testClaudeStateTransactionRollback() throws {
+        let home = try temporaryHome()
+        defer {
+            ClaudeDesktopProfileController.testingDatabaseSaveFailuresRemaining = 0
+            try? FileManager.default.removeItem(at: home)
+        }
+        let environment = ["HOME": home.path]
+        let controller = ClaudeDesktopProfileController(environment: environment)
+        let profile = try controller.addProfile(
+            name: "Claude Test",
+            baseURL: "https://claude.example.com",
+            apiKey: "test-key",
+            models: ["claude-sonnet-4"],
+            oneMModels: []
+        )
+        let appSupport = home.appendingPathComponent("Library/Application Support", isDirectory: true)
+        let stateURLs = [
+            appSupport.appendingPathComponent("Claude/claude_desktop_config.json"),
+            appSupport.appendingPathComponent("Claude-3p/claude_desktop_config.json"),
+            appSupport.appendingPathComponent("Claude-3p/configLibrary/00000000-0000-4000-8000-000000157211.json"),
+            appSupport.appendingPathComponent("Claude-3p/configLibrary/_meta.json"),
+            home.appendingPathComponent(".moa/claude_desktop_profiles.json")
+        ]
+
+        let beforeFailedApply = try stateURLs.map(optionalData)
+        ClaudeDesktopProfileController.testingDatabaseSaveFailuresRemaining = 1
+        var applyFailed = false
+        do {
+            _ = try controller.applyProfile(id: profile.id)
+        } catch {
+            applyFailed = true
+        }
+        try expect(applyFailed, "injected Claude apply database failure should propagate")
+        let afterFailedApply = try stateURLs.map(optionalData)
+        let selectedAfterFailedApply = try controller.selectedProfileID()
+        try expect(afterFailedApply == beforeFailedApply, "failed apply should restore live Claude files and profile database")
+        try expect(selectedAfterFailedApply == nil, "failed apply should restore the cached selected profile state")
+
+        _ = try controller.applyProfile(id: profile.id)
+        let appliedState = try stateURLs.map(optionalData)
+        ClaudeDesktopProfileController.testingDatabaseSaveFailuresRemaining = 1
+        var restoreFailed = false
+        do {
+            try controller.restoreOfficial()
+        } catch {
+            restoreFailed = true
+        }
+        try expect(restoreFailed, "injected Claude restore database failure should propagate")
+        let afterFailedRestore = try stateURLs.map(optionalData)
+        let selectedAfterFailedRestore = try controller.selectedProfileID()
+        try expect(afterFailedRestore == appliedState, "failed restore should restore the applied live files and database")
+        try expect(selectedAfterFailedRestore == profile.id, "failed restore should keep the selected profile")
+
+        ClaudeDesktopProfileController.testingDatabaseSaveFailuresRemaining = 1
+        var deleteFailed = false
+        do {
+            _ = try controller.deleteProfile(id: profile.id)
+        } catch {
+            deleteFailed = true
+        }
+        try expect(deleteFailed, "injected Claude delete database failure should propagate")
+        let afterFailedDelete = try stateURLs.map(optionalData)
+        let profilesAfterFailedDelete = try controller.profiles()
+        try expect(afterFailedDelete == appliedState, "failed selected-profile deletion should restore live files and database")
+        try expect(profilesAfterFailedDelete.contains(where: { $0.id == profile.id }), "failed deletion should restore the cached profile list")
+    }
+
+    private static func testCodexStateTransactionRollback() throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        defer { ConfigProfileController.testingProfileDatabaseSaveFailuresRemaining = 0 }
+        let codexHome = home.appendingPathComponent(".codex", isDirectory: true)
+        let controller = ConfigProfileController(environment: [
+            "HOME": home.path,
+            "CODEX_HOME": codexHome.path,
+            "CODEX_APP": home.appendingPathComponent("MissingCodex.app").path
+        ])
+        let profile = try controller.addProfile(
+            name: "Rollback",
+            baseURL: "https://rollback.example/v1",
+            apiKey: "rollback-key"
+        )
+        let stateURLs = [
+            controller.moaConfigURL,
+            controller.codexConfigURL,
+            controller.moaAuthURL,
+            controller.codexAuthURL,
+            controller.databaseURL,
+            controller.officialAccountsDatabaseURL
+        ]
+        let before = try stateURLs.map(optionalData)
+
+        ConfigProfileController.testingProfileDatabaseSaveFailuresRemaining = 1
+        do {
+            _ = try controller.applyProfile(id: profile.id)
+            throw TestError.failure("injected Codex profile database failure should propagate")
+        } catch let error as TestError {
+            throw error
+        } catch {
+            // Expected injected failure.
+        }
+
+        let after = try stateURLs.map(optionalData)
+        try expect(after == before, "failed Codex profile activation should restore config, auth, and database files")
+        let selectedProfileID = try controller.selectedProfileID()
+        try expect(selectedProfileID == nil, "failed activation should restore the cached selected profile")
+    }
+
+    private static func testCodexOfficialAccountTransactionRollback() throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        defer { ConfigProfileController.testingOfficialAccountDatabaseSaveFailuresRemaining = 0 }
+        let controller = ConfigProfileController(environment: [
+            "HOME": home.path,
+            "CODEX_HOME": home.appendingPathComponent(".codex", isDirectory: true).path
+        ])
+        let stateURLs = [controller.moaAuthURL, controller.codexAuthURL, controller.officialAccountsDatabaseURL]
+        let before = try stateURLs.map(optionalData)
+        let accountsBefore = try Set(FileManager.default.contentsOfDirectory(atPath: controller.officialAuthAccountsDir.path))
+
+        ConfigProfileController.testingOfficialAccountDatabaseSaveFailuresRemaining = 1
+        do {
+            _ = try controller.saveNewOfficialAccount(
+                auth: ["tokens": ["access_token": "rollback-token"]],
+                name: "Rollback Account"
+            )
+            throw TestError.failure("injected official account database failure should propagate")
+        } catch let error as TestError {
+            throw error
+        } catch {
+            // Expected injected failure.
+        }
+
+        let after = try stateURLs.map(optionalData)
+        let accountsAfter = try Set(FileManager.default.contentsOfDirectory(atPath: controller.officialAuthAccountsDir.path))
+        try expect(after == before, "failed official account save should restore auth and database files")
+        try expect(accountsAfter == accountsBefore, "failed official account save should remove newly-created account files")
+    }
+
+    private static func testDataPackageRoundTripAndCleanup() throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let fileManager = FileManager.default
+        let moaHome = home.appendingPathComponent(".moa", isDirectory: true)
+        let downloads = home.appendingPathComponent("Downloads", isDirectory: true)
+        try fileManager.createDirectory(at: moaHome, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: downloads, withIntermediateDirectories: true)
+        try "snapshot-data".write(to: moaHome.appendingPathComponent("profiles.json"), atomically: true, encoding: .utf8)
+        try fileManager.createDirectory(at: moaHome.appendingPathComponent("nested"), withIntermediateDirectories: true)
+        try "nested-data".write(to: moaHome.appendingPathComponent("nested/config.txt"), atomically: true, encoding: .utf8)
+        try fileManager.createSymbolicLink(
+            atPath: moaHome.appendingPathComponent("profiles-current.json").path,
+            withDestinationPath: "profiles.json"
+        )
+
+        let prefixes = ["MoaDataPackage-", "MoaDataImport-", "MoaImportPrevious-"]
+        let beforeTemporaryEntries = try temporaryEntries(withPrefixes: prefixes)
+        let controller = MoaDataPackageController(environment: ["HOME": home.path])
+        let packageURL = home.appendingPathComponent("round-trip.zip")
+        _ = try controller.exportDataPackage(to: packageURL)
+        try expect(fileManager.fileExists(atPath: packageURL.path), "data package export should create a zip")
+
+        let extract = home.appendingPathComponent("extract", isDirectory: true)
+        try runProcess("/usr/bin/ditto", ["-x", "-k", packageURL.path, extract.path])
+        let packageRoot = extract.appendingPathComponent("MoaDataPackage", isDirectory: true)
+        let manifest = try JSONDecoder().decode(
+            MoaDataPackageManifest.self,
+            from: Data(contentsOf: packageRoot.appendingPathComponent("MoaDataPackageManifest.json"))
+        )
+        try expect(manifest.schemaVersion == 2, "new data packages should use the symlink-aware manifest schema")
+        try expect(
+            Set(manifest.files.map(\.path)) == ["profiles.json", "profiles-current.json", "nested/config.txt"],
+            "manifest should describe files and symbolic links in the copied package snapshot"
+        )
+        try expect(manifest.files.allSatisfy { $0.sha256?.count == 64 }, "every exported file should have a SHA-256 hash")
+        let linkEntry = manifest.files.first(where: { $0.path == "profiles-current.json" })
+        try expect(linkEntry?.resolvedKind == .symbolicLink, "manifest should identify symbolic links")
+        try expect(linkEntry?.symbolicLinkDestination == "profiles.json", "manifest should preserve the symbolic link destination")
+
+        try "changed-after-export".write(to: moaHome.appendingPathComponent("profiles.json"), atomically: true, encoding: .utf8)
+        let rollbackURL = try controller.importDataPackage(from: packageURL)
+        try expect(fileManager.fileExists(atPath: rollbackURL.path), "import should retain the user-facing rollback zip")
+        let restored = try String(contentsOf: moaHome.appendingPathComponent("profiles.json"), encoding: .utf8)
+        try expect(restored == "snapshot-data", "import should restore the exact exported snapshot")
+        let restoredLink = try fileManager.destinationOfSymbolicLink(atPath: moaHome.appendingPathComponent("profiles-current.json").path)
+        try expect(restoredLink == "profiles.json", "import should restore the validated symbolic link")
+        let afterTemporaryEntries = try temporaryEntries(withPrefixes: prefixes)
+        try expect(afterTemporaryEntries == beforeTemporaryEntries, "successful export/import should not leak staging or previous-data directories")
+    }
+
+    private static func testZCodeUsageScannerLargeOutput() throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let db = home.appendingPathComponent("db.sqlite")
+        try Data().write(to: db)
+        let fakeSQLite = home.appendingPathComponent("fake-sqlite.sh")
+        let script = """
+        #!/bin/sh
+        i=0
+        while [ "$i" -lt 20000 ]; do
+          printf '2023-11-14\\037glm-5.2\\0371000\\037200\\037100\\03750\\n'
+          i=$((i + 1))
+        done
+        """
+        try script.write(to: fakeSQLite, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeSQLite.path)
+
+        let scanner = ZCodeUsageScanner(environment: [
+            "HOME": home.path,
+            "ZCODE_USAGE_DB": db.path,
+            "SQLITE3_PATH": fakeSQLite.path
+        ])
+        let report = try scanner.loadReport(now: Date(timeIntervalSince1970: 1_700_000_000), persistCache: false)
+        try expect(report.rows.count == 1, "large sqlite output should be fully drained and aggregated")
+        try expect(report.rows.first?.totalTokens == 21_000_000, "large sqlite output should not be truncated")
+    }
+
+    private static func optionalData(at url: URL) throws -> Data? {
+        FileManager.default.fileExists(atPath: url.path) ? try Data(contentsOf: url) : nil
+    }
+
+    private static func temporaryEntries(withPrefixes prefixes: [String]) throws -> Set<String> {
+        let names = try FileManager.default.contentsOfDirectory(atPath: FileManager.default.temporaryDirectory.path)
+        return Set(names.filter { name in prefixes.contains(where: name.hasPrefix) })
+    }
+
+    private static func runProcess(_ executable: String, _ arguments: [String]) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        let stderr = Pipe()
+        process.standardError = stderr
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            let message = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? executable
+            throw TestError.failure(message.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
     }
 
     private static func testUpdaterVersionComparisonAndFeedParsing() throws {

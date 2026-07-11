@@ -2,11 +2,27 @@ import AppKit
 import Foundation
 
 final class ConfigProfileController {
+    struct StateFileSnapshot {
+        let url: URL
+        let data: Data?
+    }
+
+    struct StateDirectorySnapshot {
+        let url: URL
+        let existed: Bool
+        let files: [String: Data]
+    }
+
     let fileManager = FileManager.default
     let environment: [String: String]
     let codexHome: URL
     let codexApp: URL
     let stateLock = NSRecursiveLock()
+
+    #if MOA_TESTING
+    static var testingProfileDatabaseSaveFailuresRemaining = 0
+    static var testingOfficialAccountDatabaseSaveFailuresRemaining = 0
+    #endif
 
     var codexConfigURL: URL {
         codexHome.appendingPathComponent("config.toml")
@@ -60,8 +76,10 @@ final class ConfigProfileController {
 
     var cachedDatabase: ProfileDatabase?
     var cachedDatabaseModified: Date?
+    var cachedDatabaseURLPath: String?
     var cachedOfficialAccountDatabase: CodexOfficialAccountDatabase?
     var cachedOfficialAccountDatabaseModified: Date?
+    var cachedOfficialAccountDatabaseURLPath: String?
 
     static let defaultConfig = """
 	model_provider = "Codex"

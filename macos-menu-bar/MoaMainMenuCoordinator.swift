@@ -136,12 +136,25 @@ final class MoaMainMenuCoordinator {
         app.codexProfilesMenu.removeAllItems()
         app.codexProfilesMenu.autoenablesItems = false
 
-        let selectedID = (try? app.profileController.selectedProfileID()) ?? nil
-        let profiles = (try? app.profileController.profiles()) ?? []
+        let selectedID: String?
+        let profiles: [ConfigProfile]
+        let officialAccounts: [CodexOfficialAccount]
+        let providerBridgeProfiles: [ConfigProfile]
+        let selectedOfficialAccountID: String?
+        let currentOfficialLoginSaveStatus: (hasLogin: Bool, savedAccountName: String?)
+        do {
+            selectedID = try app.profileController.selectedProfileID()
+            profiles = try app.profileController.profiles()
+            officialAccounts = try app.profileController.officialAccounts()
+            providerBridgeProfiles = try app.providerBridgeProfiles()
+            selectedOfficialAccountID = try app.profileController.selectedOfficialAccountID()
+            currentOfficialLoginSaveStatus = try app.profileController.currentOfficialLoginSaveStatus()
+        } catch {
+            showDataLoadFailure(error, source: "Codex", in: app.codexProfilesMenu)
+            app.codexProfilesItem.title = "Codex · \(MoaL10n.text("Load Failed"))"
+            return
+        }
         let directProfiles = profiles.filter { !$0.usesLocalProviderBridge }
-        let officialAccounts = (try? app.profileController.officialAccounts()) ?? []
-        let selectedOfficialAccountID = (try? app.profileController.selectedOfficialAccountID()) ?? nil
-        let currentOfficialLoginSaveStatus = (try? app.profileController.currentOfficialLoginSaveStatus()) ?? (hasLogin: false, savedAccountName: nil)
         let isProviderBridgeMode = app.profileController.isProviderBridgeModeSelected()
         let selectedName = app.currentCodexSelectionName()
         app.codexProfilesItem.title = "Codex · \(selectedName)"
@@ -220,7 +233,7 @@ final class MoaMainMenuCoordinator {
         app.codexProviderBridgeModeItem.target = app
         app.codexProviderBridgeModeItem.title = MoaL10n.text("Provider Bridge Mode")
         app.codexProviderBridgeModeItem.state = isProviderBridgeMode ? .on : .off
-        app.codexProviderBridgeModeItem.isEnabled = !app.providerBridgeProfiles().isEmpty
+        app.codexProviderBridgeModeItem.isEnabled = !providerBridgeProfiles.isEmpty
         app.codexProfilesMenu.addItem(app.codexProviderBridgeModeItem)
 
         if directProfiles.isEmpty {
@@ -285,8 +298,16 @@ final class MoaMainMenuCoordinator {
         app.providerBridgeItem.title = MoaL10n.text("Provider Bridge")
         app.providerBridgeMenu.title = MoaL10n.text("Provider Bridge")
 
-        let profiles = app.providerBridgeProfiles()
-        let selectedID = (try? app.providerBridgeProfileController.selectedProfileID()) ?? nil
+        let profiles: [ConfigProfile]
+        let selectedID: String?
+        do {
+            profiles = try app.providerBridgeProfileController.profiles()
+            selectedID = try app.providerBridgeProfileController.selectedProfileID()
+        } catch {
+            showDataLoadFailure(error, source: MoaL10n.text("Provider Bridge"), in: app.providerBridgeMenu)
+            app.providerBridgeItem.title = "\(MoaL10n.text("Provider Bridge")) · \(MoaL10n.text("Load Failed"))"
+            return
+        }
         let bridgeSnapshot = app.providerBridgeServer.snapshot()
 
         if profiles.isEmpty {
@@ -336,8 +357,16 @@ final class MoaMainMenuCoordinator {
     func rebuildClaudeDesktopProfilesMenu() {
         app.claudeDesktopProfilesMenu.removeAllItems()
 
-        let selectedID = (try? app.claudeDesktopProfileController.selectedProfileID()) ?? nil
-        let profiles = (try? app.claudeDesktopProfileController.profiles()) ?? []
+        let selectedID: String?
+        let profiles: [ClaudeDesktopProviderProfile]
+        do {
+            selectedID = try app.claudeDesktopProfileController.selectedProfileID()
+            profiles = try app.claudeDesktopProfileController.profiles()
+        } catch {
+            showDataLoadFailure(error, source: "Claude Desktop", in: app.claudeDesktopProfilesMenu)
+            app.claudeDesktopProfilesItem.title = "Claude Desktop · \(MoaL10n.text("Load Failed"))"
+            return
+        }
         let selectedName = app.claudeDesktopProfileController.selectedProfileName() ?? MoaL10n.text("Official")
         app.claudeDesktopProfilesItem.title = "Claude Desktop · \(selectedName)"
 
@@ -391,5 +420,16 @@ final class MoaMainMenuCoordinator {
         app.claudeDesktopProfilesMenu.addItem(NSMenuItem(title: MoaL10n.text("Reopen Claude Desktop"), action: #selector(AppDelegate.reopenClaudeDesktopAction), keyEquivalent: ""))
         app.claudeDesktopProfilesMenu.addItem(NSMenuItem(title: MoaL10n.text("Open Claude Folder"), action: #selector(AppDelegate.openClaudeDesktopFolderAction), keyEquivalent: ""))
         app.claudeDesktopProfilesMenu.addItem(NSMenuItem(title: MoaL10n.text("Open 3P Profile Folder"), action: #selector(AppDelegate.openClaudeDesktop3PFolderAction), keyEquivalent: ""))
+    }
+
+    private func showDataLoadFailure(_ error: Error, source: String, in menu: NSMenu) {
+        let item = NSMenuItem(
+            title: MoaL10n.format("Unable to load %@ data: %@", source, error.localizedDescription),
+            action: nil,
+            keyEquivalent: ""
+        )
+        item.isEnabled = false
+        menu.addItem(item)
+        app.statusItemText.title = AppDelegate.statusTitle("Load Failed")
     }
 }

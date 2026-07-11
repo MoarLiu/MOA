@@ -289,3 +289,10 @@
 "ZCode" = "ZCode";
 "ZCode Official Mode" = "ZCode Official Mode";
 "ZCode reopened" = "ZCode reopened";
+"Claude Desktop state update failed (%@), and rollback also failed: %@" = "Claude Desktop state update failed (%@), and rollback also failed: %@";
+"Codex state update failed (%@), and rollback also failed: %@" = "Codex state update failed (%@), and rollback also failed: %@";
+"Data replacement failed (%@), and the previous data could not be restored (%@). The previous data is preserved at %@." = "Data replacement failed (%@), and the previous data could not be restored (%@). The previous data is preserved at %@.";
+"Provider bridge port must be between 0 and 65535 (received %lld)." = "Provider bridge port must be between 0 and 65535 (received %lld).";
+"The saved Codex official account path is invalid: %@" = "The saved Codex official account path is invalid: %@";
+"Load Failed" = "Load Failed";
+"Unable to load %@ data: %@" = "Unable to load %@ data: %@";

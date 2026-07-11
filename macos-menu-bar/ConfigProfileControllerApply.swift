@@ -6,27 +6,31 @@ extension ConfigProfileController {
         try stateLock.withLock {
             try ensureStore()
 
-            var database = try loadDatabase()
-            guard let index = database.profiles.firstIndex(where: { $0.id == id }) else {
-                throw NSError(domain: "Moa", code: 404, userInfo: [NSLocalizedDescriptionKey: MoaL10n.text("Configuration not found.")])
+            return try withCodexStateTransaction(
+                files: [moaConfigURL, codexConfigURL, moaAuthURL, codexAuthURL, databaseURL, officialAccountsDatabaseURL],
+                includeOfficialAuthDirectory: true
+            ) {
+                var database = try loadDatabase()
+                guard let index = database.profiles.firstIndex(where: { $0.id == id }) else {
+                    throw NSError(domain: "Moa", code: 404, userInfo: [NSLocalizedDescriptionKey: MoaL10n.text("Configuration not found.")])
+                }
+                var profile = database.profiles[index]
+                profile = try preparedProfileForApply(profile)
+
+                try syncMoaAuthSessionFromCodex()
+                try backupCodexFiles()
+
+                let currentConfig = try syncedMoaConfig()
+                let generatedConfig = generateConfig(currentConfig, selecting: profile)
+                try writeText(generatedConfig, to: moaConfigURL)
+                try writeText(generatedConfig, to: codexConfigURL)
+                try copyFile(from: moaAuthURL, to: codexAuthURL)
+
+                database.profiles[index] = profile
+                database.selectedProfileID = profile.id
+                try saveDatabase(database)
+                return profile
             }
-            var profile = database.profiles[index]
-            profile = try preparedProfileForApply(profile)
-
-            try syncMoaAuthSessionFromCodex()
-            try backupCodexFiles()
-
-            let currentConfig = try syncedMoaConfig()
-            let generatedConfig = generateConfig(currentConfig, selecting: profile)
-            try writeText(generatedConfig, to: moaConfigURL)
-            try writeText(generatedConfig, to: codexConfigURL)
-
-            try copyFile(from: moaAuthURL, to: codexAuthURL)
-
-            database.profiles[index] = profile
-            database.selectedProfileID = profile.id
-            try saveDatabase(database)
-            return profile
         }
     }
 
@@ -35,20 +39,24 @@ extension ConfigProfileController {
         try stateLock.withLock {
             try ensureStore()
 
-            try syncMoaAuthSessionFromCodex()
-            try backupCodexFiles()
+            return try withCodexStateTransaction(
+                files: [moaConfigURL, codexConfigURL, moaAuthURL, codexAuthURL, databaseURL, officialAccountsDatabaseURL],
+                includeOfficialAuthDirectory: true
+            ) {
+                try syncMoaAuthSessionFromCodex()
+                try backupCodexFiles()
 
-            let currentConfig = try syncedMoaConfig()
-            let generatedConfig = generateConfig(currentConfig, selecting: profile)
-            try writeText(generatedConfig, to: moaConfigURL)
-            try writeText(generatedConfig, to: codexConfigURL)
+                let currentConfig = try syncedMoaConfig()
+                let generatedConfig = generateConfig(currentConfig, selecting: profile)
+                try writeText(generatedConfig, to: moaConfigURL)
+                try writeText(generatedConfig, to: codexConfigURL)
+                try copyFile(from: moaAuthURL, to: codexAuthURL)
 
-            try copyFile(from: moaAuthURL, to: codexAuthURL)
-
-            var database = try loadDatabase()
-            database.selectedProfileID = Self.providerBridgeModeID
-            try saveDatabase(database)
-            return profile
+                var database = try loadDatabase()
+                database.selectedProfileID = Self.providerBridgeModeID
+                try saveDatabase(database)
+                return profile
+            }
         }
     }
 
@@ -70,6 +78,7 @@ extension ConfigProfileController {
             if prepared.bridgePort == nil {
                 prepared.bridgePort = MoaProviderBridgeDefaults.defaultPort
             }
+            _ = try MoaProviderBridgePort.validated(prepared.resolvedBridgePort)
             return prepared
         }
 
@@ -86,22 +95,26 @@ extension ConfigProfileController {
         try stateLock.withLock {
             try ensureStore()
 
-            if let selectedAccount = try selectedOfficialAccount() {
-                _ = try applyOfficialAccount(id: selectedAccount.id)
-            } else {
-                try syncMoaAuthSessionFromCodex(updateSelectedOfficialAccount: false)
+            try withCodexStateTransaction(
+                files: [moaConfigURL, codexConfigURL, moaAuthURL, codexAuthURL, databaseURL, officialAccountsDatabaseURL],
+                includeOfficialAuthDirectory: true
+            ) {
+                if let selectedAccount = try selectedOfficialAccount() {
+                    _ = try applyOfficialAccount(id: selectedAccount.id)
+                } else {
+                    try syncMoaAuthSessionFromCodex(updateSelectedOfficialAccount: false)
+                }
+
+                try backupCodexFiles()
+                let currentConfig = try syncedMoaConfig()
+                let officialConfig = MoaCodexConfigEditor.restoringOfficialMode(from: currentConfig)
+                try writeText(officialConfig, to: moaConfigURL)
+                try writeText(officialConfig, to: codexConfigURL)
+
+                var database = try loadDatabase()
+                database.selectedProfileID = nil
+                try saveDatabase(database)
             }
-
-            try backupCodexFiles()
-
-            let currentConfig = try syncedMoaConfig()
-            let officialConfig = MoaCodexConfigEditor.restoringOfficialMode(from: currentConfig)
-            try writeText(officialConfig, to: moaConfigURL)
-            try writeText(officialConfig, to: codexConfigURL)
-
-            var database = try loadDatabase()
-            database.selectedProfileID = nil
-            try saveDatabase(database)
         }
     }
 
@@ -161,7 +174,7 @@ extension ConfigProfileController {
                 email: email
             )
             account.lastUsedAt = Self.isoTimestamp()
-            try writeAuthJSON(auth, to: officialAuthURL(for: account))
+            try writeAuthJSON(auth, to: try officialAuthURL(for: account))
             database.selectedAccountID = account.id
             database.accounts = [account]
         }

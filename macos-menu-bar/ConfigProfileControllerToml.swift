@@ -132,61 +132,42 @@ extension ConfigProfileController {
 
     func tomlRootInsertionIndex(in text: String) -> String.Index {
         var insertionIndex = text.endIndex
-        var lineStart = text.startIndex
 
-        while lineStart < text.endIndex {
-            let nextLineStart = text[lineStart...].firstIndex(of: "\n").map { text.index(after: $0) } ?? text.endIndex
-            let lineEnd = nextLineStart > lineStart && text[text.index(before: nextLineStart)] == "\n"
-                ? text.index(before: nextLineStart)
-                : nextLineStart
-            let line = String(text[lineStart..<lineEnd]).trimmingCharacters(in: .whitespacesAndNewlines)
-
-            if parseTomlTableName(from: line) != nil {
-                return lineStart
+        for context in MoaTomlEditor.lineContexts(in: text) {
+            let line = context.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if context.isStructural, parseTomlTableName(from: line) != nil {
+                return context.contentRange.lowerBound
             }
-
-            insertionIndex = nextLineStart
-            lineStart = nextLineStart
+            insertionIndex = context.nextLineStart
         }
 
         return insertionIndex
     }
 
     func tomlHasTable(_ table: String, in text: String) -> Bool {
-        let escaped = NSRegularExpression.escapedPattern(for: table)
-        let pattern = #"(?m)^\s*\[\s*__TABLE__\s*\]\s*(#.*)?$"#
-            .replacingOccurrences(of: "__TABLE__", with: escaped)
-        return (try? NSRegularExpression(pattern: pattern).firstMatch(in: text, range: NSRange(text.startIndex..., in: text))) != nil
+        tomlTableNames(in: text).contains(table)
     }
 
     func tomlTableInsertionIndex(for table: String, in text: String) -> String.Index? {
         var currentTable = ""
         var foundTable = false
         var insertionIndex: String.Index?
-        var lineStart = text.startIndex
+        for context in MoaTomlEditor.lineContexts(in: text) {
+            let line = context.text.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        while lineStart < text.endIndex {
-            let nextLineStart = text[lineStart...].firstIndex(of: "\n").map { text.index(after: $0) } ?? text.endIndex
-            let lineEnd = nextLineStart > lineStart && text[text.index(before: nextLineStart)] == "\n"
-                ? text.index(before: nextLineStart)
-                : nextLineStart
-            let line = String(text[lineStart..<lineEnd]).trimmingCharacters(in: .whitespacesAndNewlines)
-
-            if let tableName = parseTomlTableName(from: line) {
+            if context.isStructural, let tableName = parseTomlTableName(from: line) {
                 if foundTable && tableName != currentTable {
-                    return lineStart
+                    return context.contentRange.lowerBound
                 }
 
                 currentTable = tableName
                 if tableName == table {
                     foundTable = true
-                    insertionIndex = nextLineStart
+                    insertionIndex = context.nextLineStart
                 }
             } else if foundTable {
-                insertionIndex = nextLineStart
+                insertionIndex = context.nextLineStart
             }
-
-            lineStart = nextLineStart
         }
 
         return foundTable ? insertionIndex : nil
@@ -287,8 +268,9 @@ extension ConfigProfileController {
     }
 
     func tomlTableNames(in text: String) -> [String] {
-        text.components(separatedBy: "\n").compactMap { line in
-            parseTomlTableName(from: line.trimmingCharacters(in: .whitespacesAndNewlines))
+        MoaTomlEditor.lineContexts(in: text).compactMap { context in
+            guard context.isStructural else { return nil }
+            return parseTomlTableName(from: context.text.trimmingCharacters(in: .whitespacesAndNewlines))
         }
     }
 
@@ -321,9 +303,10 @@ extension ConfigProfileController {
         var outputLines: [String] = []
         var skipping = false
 
-        for line in text.components(separatedBy: "\n") {
+        for context in MoaTomlEditor.lineContexts(in: text) {
+            let line = context.text
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let tableName = parseTomlTableName(from: trimmed) {
+            if context.isStructural, let tableName = parseTomlTableName(from: trimmed) {
                 skipping = shouldRemove(tableName)
             }
 
@@ -363,23 +346,23 @@ extension ConfigProfileController {
             return output
         }
 
-        let existingLines = String(text[tableRange])
-            .components(separatedBy: "\n")
+        let existingLines = MoaTomlEditor.lineContexts(in: String(text[tableRange]))
             .dropFirst()
-            .filter { line in
-                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else {
+            .filter { context in
+                let trimmed = context.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !context.isStructural || !trimmed.isEmpty else {
                     return false
                 }
 
-                if let keyValue = parseTomlKeyValue(from: line),
+                if context.isStructural,
+                   let keyValue = parseTomlKeyValue(from: context.text),
                    keyValue.key == "remote_connections" || keyValue.key == "remote_control" {
                     return false
                 }
 
                 return true
             }
-        let replacement = (featureLines + existingLines).joined(separator: "\n")
+        let replacement = (featureLines + existingLines.map(\.text)).joined(separator: "\n")
         var output = text
         let suffix = tableRange.upperBound < output.endIndex ? "\n\n" : ""
         output.replaceSubrange(tableRange, with: replacement + suffix)
@@ -389,7 +372,7 @@ extension ConfigProfileController {
     func removeRemoteConnectionFeatures(in text: String) -> String {
         var output: [String] = []
         var featureHeader: String?
-        var featureLines: [String] = []
+        var featureLines: [MoaTomlEditor.LineContext] = []
         var inFeatures = false
 
         func flushFeatures() {
@@ -397,27 +380,30 @@ extension ConfigProfileController {
                 return
             }
 
-            let remaining = featureLines.filter { line in
-                guard let keyValue = parseTomlKeyValue(from: line) else {
+            let remaining = featureLines.filter { context in
+                guard context.isStructural,
+                      let keyValue = parseTomlKeyValue(from: context.text)
+                else {
                     return true
                 }
                 return keyValue.key != "remote_connections" && keyValue.key != "remote_control"
             }
-            let hasNonEmptyContent = remaining.contains { line in
-                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            let hasNonEmptyContent = remaining.contains { context in
+                let trimmed = context.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 return !trimmed.isEmpty && !trimmed.hasPrefix("#")
             }
 
             if hasNonEmptyContent {
                 output.append(featureHeader)
-                output.append(contentsOf: remaining)
+                output.append(contentsOf: remaining.map(\.text))
             }
         }
 
-        for line in text.components(separatedBy: "\n") {
+        for context in MoaTomlEditor.lineContexts(in: text) {
+            let line = context.text
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
 
-            if let table = parseTomlTableName(from: trimmed) {
+            if context.isStructural, let table = parseTomlTableName(from: trimmed) {
                 if inFeatures {
                     flushFeatures()
                     featureHeader = nil
@@ -434,7 +420,7 @@ extension ConfigProfileController {
             }
 
             if inFeatures {
-                featureLines.append(line)
+                featureLines.append(context)
             } else {
                 output.append(line)
             }
@@ -450,7 +436,8 @@ extension ConfigProfileController {
     func tomlBoolValue(in text: String, table: String, key: String) -> Bool? {
         var currentTable = ""
 
-        for line in text.components(separatedBy: "\n") {
+        for context in MoaTomlEditor.lineContexts(in: text) where context.isStructural {
+            let line = context.text
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             if let tableName = parseTomlTableName(from: trimmed) {
                 currentTable = tableName
@@ -515,27 +502,20 @@ extension ConfigProfileController {
     }
 
     func tomlTableBlockRange(for table: String, in text: String) -> Range<String.Index>? {
-        var lineStart = text.startIndex
         var tableStart: String.Index?
 
-        while lineStart < text.endIndex {
-            let nextLineStart = text[lineStart...].firstIndex(of: "\n").map { text.index(after: $0) } ?? text.endIndex
-            let lineEnd = nextLineStart > lineStart && text[text.index(before: nextLineStart)] == "\n"
-                ? text.index(before: nextLineStart)
-                : nextLineStart
-            let line = String(text[lineStart..<lineEnd]).trimmingCharacters(in: .whitespacesAndNewlines)
+        for context in MoaTomlEditor.lineContexts(in: text) where context.isStructural {
+            let line = context.text.trimmingCharacters(in: .whitespacesAndNewlines)
 
             if let tableName = parseTomlTableName(from: line) {
                 if let start = tableStart, tableName != table {
-                    return start..<lineStart
+                    return start..<context.contentRange.lowerBound
                 }
 
                 if tableName == table {
-                    tableStart = lineStart
+                    tableStart = context.contentRange.lowerBound
                 }
             }
-
-            lineStart = nextLineStart
         }
 
         if let start = tableStart {
@@ -546,17 +526,15 @@ extension ConfigProfileController {
     }
 
     func firstTomlStringValue(in text: String, key: String) -> String? {
-        let pattern = #"(?m)^\s*__KEY__\s*=\s*("([^"\\]|\\.)*"|'[^']*')"#
-            .replacingOccurrences(of: "__KEY__", with: NSRegularExpression.escapedPattern(for: key))
-        guard
-            let regex = try? NSRegularExpression(pattern: pattern),
-            let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-            let range = Range(match.range(at: 1), in: text)
+        guard let entry = tomlEntries(in: text).first(where: { $0.key == key }) else {
+            return nil
+        }
+        let raw = entry.value
+        guard (raw.hasPrefix("\"") && raw.hasSuffix("\""))
+                || (raw.hasPrefix("'") && raw.hasSuffix("'"))
         else {
             return nil
         }
-
-        let raw = String(text[range])
         return unquoteTomlString(raw)
     }
 

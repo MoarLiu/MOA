@@ -310,7 +310,7 @@ extension ConfigProfileController {
                 throw NSError(domain: "Moa", code: 404, userInfo: [NSLocalizedDescriptionKey: MoaL10n.text("Configuration not found.")])
             }
             if let port {
-                database.profiles[index].bridgePort = port
+                database.profiles[index].bridgePort = try MoaProviderBridgePort.validated(port)
             }
             if let token {
                 database.profiles[index].bridgeToken = token.trimmingCharacters(in: .whitespacesAndNewlines)

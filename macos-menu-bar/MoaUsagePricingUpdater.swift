@@ -1,6 +1,6 @@
 import Foundation
 
-struct MoaUsageRemotePricing: Codable, Equatable {
+struct MoaUsageRemotePricing: Codable, Equatable, Sendable {
     var inputUSDPerMillion: Double
     var outputUSDPerMillion: Double
     var cacheReadUSDPerMillion: Double?
@@ -26,7 +26,7 @@ struct MoaUsageRemotePricing: Codable, Equatable {
     }
 }
 
-struct MoaUsagePricingCatalogSnapshot: Codable, Equatable {
+struct MoaUsagePricingCatalogSnapshot: Codable, Equatable, Sendable {
     static let currentVersion = 1
 
     var version: Int
@@ -46,7 +46,7 @@ struct MoaUsagePricingCatalogSnapshot: Codable, Equatable {
     }
 }
 
-enum MoaUsagePricingCatalogUpdate: Equatable {
+enum MoaUsagePricingCatalogUpdate: Equatable, Sendable {
     case unchanged
     case updated(added: Int, changed: Int)
 
@@ -56,7 +56,7 @@ enum MoaUsagePricingCatalogUpdate: Equatable {
     }
 }
 
-final class MoaUsagePricingCatalogStore {
+final class MoaUsagePricingCatalogStore: @unchecked Sendable {
     static let shared = MoaUsagePricingCatalogStore()
 
     private struct UpdateState: Codable {
@@ -348,7 +348,7 @@ enum MoaUsagePricingRemoteParser {
     }
 }
 
-final class MoaUsagePricingUpdater {
+final class MoaUsagePricingUpdater: Sendable {
     enum UpdateError: LocalizedError {
         case invalidResponse
         case payloadTooLarge

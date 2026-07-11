@@ -47,7 +47,7 @@ struct MoaProviderBridgeErrorDiagnostic: Codable, Equatable {
     var upstreamHost: String
 }
 
-final class MoaProviderBridgeDiagnostics {
+final class MoaProviderBridgeDiagnostics: @unchecked Sendable {
     static let shared = MoaProviderBridgeDiagnostics()
     static let fileName = "provider-bridge-diagnostics.json"
 

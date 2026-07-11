@@ -1,6 +1,18 @@
 import Foundation
 
 enum MoaTomlEditor {
+    struct LineContext {
+        let text: String
+        let contentRange: Range<String.Index>
+        let nextLineStart: String.Index
+        let isStructural: Bool
+    }
+
+    private enum MultilineString {
+        case basic
+        case literal
+    }
+
     struct Entry {
         let table: String
         let key: String
@@ -19,26 +31,131 @@ enum MoaTomlEditor {
     static func entries(in text: String) -> [Entry] {
         var entries: [Entry] = []
         var currentTable = ""
-        var lineStart = text.startIndex
 
-        while lineStart < text.endIndex {
-            let nextLineStart = text[lineStart...].firstIndex(of: "\n").map { text.index(after: $0) } ?? text.endIndex
-            let lineEnd = nextLineStart > lineStart && text[text.index(before: nextLineStart)] == "\n"
-                ? text.index(before: nextLineStart)
-                : nextLineStart
-            let line = String(text[lineStart..<lineEnd])
+        for context in lineContexts(in: text) where context.isStructural {
+            let line = context.text
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
 
             if let tableName = tableName(from: trimmed) {
                 currentTable = tableName
             } else if let keyValue = keyValue(from: line) {
-                entries.append(Entry(table: currentTable, key: keyValue.key, value: keyValue.value, lineRange: lineStart..<lineEnd))
+                entries.append(Entry(table: currentTable, key: keyValue.key, value: keyValue.value, lineRange: context.contentRange))
             }
-
-            lineStart = nextLineStart
         }
 
         return entries
+    }
+
+    static func lineContexts(in text: String) -> [LineContext] {
+        var contexts: [LineContext] = []
+        var multiline: MultilineString?
+        var lineStart = text.startIndex
+
+        while lineStart < text.endIndex {
+            let newline = text[lineStart...].firstIndex(of: "\n")
+            let lineEnd = newline ?? text.endIndex
+            let nextLineStart = newline.map { text.index(after: $0) } ?? text.endIndex
+            let line = String(text[lineStart..<lineEnd])
+            let startedInsideMultiline = multiline != nil
+            let sawMultilineDelimiter = updateMultilineState(for: line, state: &multiline)
+            contexts.append(LineContext(
+                text: line,
+                contentRange: lineStart..<lineEnd,
+                nextLineStart: nextLineStart,
+                isStructural: !startedInsideMultiline && multiline == nil && !sawMultilineDelimiter
+            ))
+            lineStart = nextLineStart
+        }
+
+        if text.isEmpty || text.hasSuffix("\n") {
+            contexts.append(LineContext(
+                text: "",
+                contentRange: text.endIndex..<text.endIndex,
+                nextLineStart: text.endIndex,
+                isStructural: multiline == nil
+            ))
+        }
+        return contexts
+    }
+
+    private static func updateMultilineState(for line: String, state: inout MultilineString?) -> Bool {
+        let characters = Array(line)
+        var index = 0
+        var quote: Character?
+        var escaped = false
+        var sawDelimiter = false
+
+        func hasDelimiter(_ delimiter: [Character], at offset: Int) -> Bool {
+            offset + delimiter.count <= characters.count
+                && Array(characters[offset..<(offset + delimiter.count)]) == delimiter
+        }
+
+        while index < characters.count {
+            if let multiline = state {
+                let delimiter: [Character] = multiline == .basic ? ["\"", "\"", "\""] : ["'", "'", "'"]
+                if hasDelimiter(delimiter, at: index), multiline == .literal || !isEscaped(characters, at: index) {
+                    state = nil
+                    sawDelimiter = true
+                    index += 3
+                } else {
+                    index += 1
+                }
+                continue
+            }
+
+            if let currentQuote = quote {
+                let character = characters[index]
+                if currentQuote == "'" {
+                    if character == "'" {
+                        quote = nil
+                    }
+                } else if character == "\"" && !escaped {
+                    quote = nil
+                }
+                if currentQuote == "\"" && character == "\\" && !escaped {
+                    escaped = true
+                } else {
+                    escaped = false
+                }
+                index += 1
+                continue
+            }
+
+            if hasDelimiter(["\"", "\"", "\""], at: index) {
+                state = .basic
+                sawDelimiter = true
+                index += 3
+            } else if hasDelimiter(["'", "'", "'"], at: index) {
+                state = .literal
+                sawDelimiter = true
+                index += 3
+            } else if characters[index] == "#" {
+                break
+            } else if characters[index] == "\"" || characters[index] == "'" {
+                quote = characters[index]
+                escaped = false
+                index += 1
+            } else {
+                index += 1
+            }
+        }
+        return sawDelimiter
+    }
+
+    private static func isEscaped(_ characters: [Character], at index: Int) -> Bool {
+        guard index > 0 else {
+            return false
+        }
+        var cursor = index - 1
+        var backslashes = 0
+        while characters[cursor] == "\\" {
+            backslashes += 1
+            guard cursor > 0 else {
+                break
+            }
+            cursor -= 1
+        }
+        return backslashes % 2 == 1
     }
 
     static func tableName(from line: String) -> String? {
@@ -123,31 +240,45 @@ enum MoaTomlEditor {
     }
 
     static func collapseBlankLines(_ text: String) -> String {
-        var output = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        while output.contains("\n\n\n") {
-            output = output.replacingOccurrences(of: "\n\n\n", with: "\n\n")
+        let contexts = lineContexts(in: text)
+        guard let firstContent = contexts.firstIndex(where: { !isStructuralBlank($0) }),
+              let lastContent = contexts.lastIndex(where: { !isStructuralBlank($0) })
+        else {
+            return ""
         }
-        return output
+
+        var output: [String] = []
+        var previousWasStructuralBlank = false
+        for context in contexts[firstContent...lastContent] {
+            let isBlank = isStructuralBlank(context)
+            if isBlank && previousWasStructuralBlank {
+                continue
+            }
+            output.append(context.text)
+            previousWasStructuralBlank = isBlank
+        }
+        return output.joined(separator: "\n")
     }
 
     static func collapseBlankLinesBeforeTables(_ text: String) -> String {
-        var output = collapseBlankLines(text)
+        let output = collapseBlankLines(text)
 
         var lines: [String] = []
-        for line in output.components(separatedBy: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            if tableName(from: trimmed) != nil,
+        for context in lineContexts(in: output) {
+            let trimmed = context.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if context.isStructural,
+               tableName(from: trimmed) != nil,
                let previousLine = lines.last,
                !previousLine.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 lines.append("")
             }
-            lines.append(line)
+            lines.append(context.text)
         }
-        output = lines.joined(separator: "\n")
-        while output.contains("\n\n\n") {
-            output = output.replacingOccurrences(of: "\n\n\n", with: "\n\n")
-        }
-        return output
+        return collapseBlankLines(lines.joined(separator: "\n"))
+    }
+
+    private static func isStructuralBlank(_ context: LineContext) -> Bool {
+        context.isStructural && context.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     static func quotedString(_ value: String) -> String {

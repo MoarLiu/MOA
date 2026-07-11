@@ -56,6 +56,7 @@ enum CodexOfficialAccountError: LocalizedError {
     case noCurrentLogin
     case invalidAccountName
     case duplicateCurrentLogin(String)
+    case invalidAuthPath(String)
 
     var errorDescription: String? {
         switch self {
@@ -69,6 +70,8 @@ enum CodexOfficialAccountError: LocalizedError {
             return MoaL10n.text("Account name is required.")
         case .duplicateCurrentLogin(let name):
             return MoaL10n.format("The current Codex official login is already saved as \"%@\".", name)
+        case .invalidAuthPath(let path):
+            return MoaL10n.format("The saved Codex official account path is invalid: %@", path)
         }
     }
 }

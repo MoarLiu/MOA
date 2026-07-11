@@ -4,12 +4,13 @@ enum MoaCodexConfigEditor {
     static func removingExperimentalBearerTokens(from text: String) -> String {
         var outputLines: [String] = []
         var currentTable = ""
-        for line in text.components(separatedBy: "\n") {
+        for context in MoaTomlEditor.lineContexts(in: text) {
+            let line = context.text
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let tableName = MoaTomlEditor.tableName(from: trimmed) {
+            if context.isStructural, let tableName = MoaTomlEditor.tableName(from: trimmed) {
                 currentTable = tableName
             }
-            if isManagedRemovalLine(line, currentTable: currentTable) {
+            if context.isStructural, isManagedRemovalLine(line, currentTable: currentTable) {
                 continue
             }
             outputLines.append(line)
@@ -23,10 +24,11 @@ enum MoaCodexConfigEditor {
         var currentTable = ""
         var skippingProviderTable = false
 
-        for line in text.components(separatedBy: "\n") {
+        for context in MoaTomlEditor.lineContexts(in: text) {
+            let line = context.text
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
 
-            if let tableName = MoaTomlEditor.tableName(from: trimmed) {
+            if context.isStructural, let tableName = MoaTomlEditor.tableName(from: trimmed) {
                 currentTable = tableName
                 skippingProviderTable = isUnselectedMoaManagedProviderTable(
                     tableName,
@@ -44,7 +46,7 @@ enum MoaCodexConfigEditor {
                 continue
             }
 
-            if isOfficialRestoreRemovalLine(
+            if context.isStructural, isOfficialRestoreRemovalLine(
                 line,
                 currentTable: currentTable,
                 selectedProviderID: selectedProviderID

@@ -113,17 +113,32 @@ final class ZCodeUsageScanner {
             query
         ]
 
-        let stdout = Pipe()
-        let stderr = Pipe()
+        let captureRoot = fileManager.temporaryDirectory
+            .appendingPathComponent("MoaZCodeSQLite-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: captureRoot, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: captureRoot) }
+
+        let stdoutURL = captureRoot.appendingPathComponent("stdout")
+        let stderrURL = captureRoot.appendingPathComponent("stderr")
+        try Data().write(to: stdoutURL)
+        try Data().write(to: stderrURL)
+        let stdout = try FileHandle(forWritingTo: stdoutURL)
+        let stderr = try FileHandle(forWritingTo: stderrURL)
+        defer {
+            try? stdout.close()
+            try? stderr.close()
+        }
         process.standardOutput = stdout
         process.standardError = stderr
 
         try process.run()
         process.waitUntilExit()
+        try stdout.close()
+        try stderr.close()
 
-        let output = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let output = String(data: try Data(contentsOf: stdoutURL), encoding: .utf8) ?? ""
         guard process.terminationStatus == 0 else {
-            let message = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+            let message = String(data: try Data(contentsOf: stderrURL), encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             throw NSError(
                 domain: "Moa",

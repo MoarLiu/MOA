@@ -91,6 +91,13 @@ struct ConfigProfile: Codable, Equatable {
         reasoningMode = try container.decodeIfPresent(MoaProviderReasoningMode.self, forKey: .reasoningMode)
         bridgeToken = try container.decodeIfPresent(String.self, forKey: .bridgeToken)
         bridgePort = try container.decodeIfPresent(Int.self, forKey: .bridgePort)
+        if let bridgePort, !MoaProviderBridgePort.range.contains(bridgePort) {
+            throw DecodingError.dataCorruptedError(
+                forKey: .bridgePort,
+                in: container,
+                debugDescription: MoaProviderBridgePortError.outOfRange(bridgePort).localizedDescription
+            )
+        }
     }
 
     func encode(to encoder: Encoder) throws {

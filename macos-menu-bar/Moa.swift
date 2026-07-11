@@ -243,9 +243,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         fastModeItem.state = enabled ? .on : .off
         statusItemText.title = enabled ? Self.statusTitle("Turning Fast on...") : Self.statusTitle("Turning Fast off...")
 
+        let controller = controller
         DispatchQueue.global(qos: .userInitiated).async {
             let result = Result {
-                try self.controller.applyFastMode(enabled)
+                try controller.applyFastMode(enabled)
             }
 
             DispatchQueue.main.async {
@@ -270,9 +271,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         remoteConnectionsItem.state = enabled ? .on : .off
         statusItemText.title = enabled ? Self.statusTitle("Turning Remote on...") : Self.statusTitle("Turning Remote off...")
 
+        let controller = controller
         DispatchQueue.global(qos: .userInitiated).async {
             let result = Result {
-                try self.controller.applyRemoteConnections(enabled)
+                try controller.applyRemoteConnections(enabled)
             }
 
             DispatchQueue.main.async {
