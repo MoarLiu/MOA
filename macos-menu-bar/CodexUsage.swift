@@ -399,6 +399,8 @@ enum CodexUsageMenuState {
 }
 
 final class CodexUsageScanner {
+    private static let cacheVersion = 2
+
     private struct TokenUsage: Codable, Equatable {
         var input: Int = 0
         var cached: Int = 0
@@ -443,7 +445,7 @@ final class CodexUsageScanner {
 
     private var cacheURL: URL {
         MoaDataRoot.currentURL(environment: environment)
-            .appendingPathComponent("codex-usage-cache-v1.json")
+            .appendingPathComponent("codex-usage-cache-v2.json")
     }
 
     init(environment: [String: String] = ProcessInfo.processInfo.environment) {
@@ -470,8 +472,8 @@ final class CodexUsageScanner {
         let files = sessionFiles(in: roots)
         let validPaths = Set(files.map(\.path))
         var cache = lockedLoadCache()
-        if cache.version != 1 || cache.codexHomePath != codexHome.path {
-            cache = Cache(version: 1, codexHomePath: codexHome.path, files: [:])
+        if cache.version != Self.cacheVersion || cache.codexHomePath != codexHome.path {
+            cache = Cache(version: Self.cacheVersion, codexHomePath: codexHome.path, files: [:])
         }
         let originalCache = cache
 
@@ -527,6 +529,7 @@ final class CodexUsageScanner {
         var days: [String: [String: TokenUsage]] = [:]
         var currentModel: String?
         var previousTotals: RunningTotals?
+        var hasModelContext = false
 
         func add(dayKey: String, model: String, input: Int, cached: Int, output: Int) {
             guard input > 0 || cached > 0 || output > 0 else { return }
@@ -544,6 +547,7 @@ final class CodexUsageScanner {
                        let model = extractStringField("model", fromPrefixOf: line)
                     {
                         currentModel = model
+                        hasModelContext = true
                     }
                     return
                 }
@@ -556,6 +560,7 @@ final class CodexUsageScanner {
                     if let payload = object["payload"] as? [String: Any] {
                         currentModel = payload["model"] as? String
                             ?? (payload["info"] as? [String: Any])?["model"] as? String
+                        hasModelContext = currentModel?.isEmpty == false
                     }
                     return
                 }
@@ -568,12 +573,22 @@ final class CodexUsageScanner {
                 else { return }
 
                 let info = payload["info"] as? [String: Any]
-                let model = currentModel
-                    ?? info?["model"] as? String
+                let eventModel = info?["model"] as? String
                     ?? info?["model_name"] as? String
                     ?? payload["model"] as? String
                     ?? object["model"] as? String
-                    ?? "gpt-5"
+                let model = currentModel
+                    ?? eventModel
+
+                // Forked/subagent rollouts can begin with a compressed copy of the
+                // parent's historical token_count events but without the parent's
+                // turn_context records. Counting that bootstrap history duplicates
+                // usage, and assigning an arbitrary GPT-5 fallback mislabels it.
+                // Only accept events once this rollout provides verifiable model
+                // context (or the event itself names its model).
+                guard hasModelContext || eventModel?.isEmpty == false,
+                      let model, !model.isEmpty
+                else { return }
                 let total = info?["total_token_usage"] as? [String: Any]
                 let last = info?["last_token_usage"] as? [String: Any]
                 let delta: RunningTotals?
@@ -772,7 +787,7 @@ final class CodexUsageScanner {
         guard let data = try? Data(contentsOf: cacheURL),
               let decoded = try? JSONDecoder().decode(Cache.self, from: data)
         else {
-            return Cache(version: 1, codexHomePath: codexHome.path, files: [:])
+            return Cache(version: Self.cacheVersion, codexHomePath: codexHome.path, files: [:])
         }
         return decoded
     }

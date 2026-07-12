@@ -60,6 +60,7 @@ private enum MoaCoreTests {
             ("updater compares versions and parses release feed", testUpdaterVersionComparisonAndFeedParsing),
             ("updater prunes old backups", testUpdaterBackupPruning),
             ("GPT-5.6 family uses current local pricing", testGPT56Pricing),
+            ("Codex usage ignores inherited model-less token history", testCodexUsageIgnoresInheritedHistory),
             ("remote pricing catalog parses, merges, and overrides fallback", testRemotePricingCatalog),
             ("pricing updater schedules the daily local check", testPricingUpdateSchedule),
             ("ZCode GLM pricing is estimated from usage tokens", testZCodePricing),
@@ -1042,6 +1043,33 @@ private enum MoaCoreTests {
             )
             try expectClose(cost ?? -1, item.expected, "\(item.model) should use current priority pricing")
         }
+    }
+
+    private static func testCodexUsageIgnoresInheritedHistory() throws {
+        let home = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let sessions = home.appendingPathComponent(".codex/sessions/2026/07/11", isDirectory: true)
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        let rollout = sessions.appendingPathComponent("rollout-subagent.jsonl")
+        let lines = [
+            #"{"timestamp":"2026-07-11T13:00:00Z","type":"session_meta","payload":{"id":"child","source":{"subagent":{}}}}"#,
+            #"{"timestamp":"2026-07-11T13:00:00.001Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1000000,"cached_input_tokens":900000,"output_tokens":10000}}}}"#,
+            #"{"timestamp":"2026-07-11T13:00:01Z","type":"turn_context","payload":{"model":"gpt-5.6-sol"}}"#,
+            #"{"timestamp":"2026-07-11T13:00:02Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1000,"cached_input_tokens":800,"output_tokens":100}}}}"#
+        ]
+        try (lines.joined(separator: "\n") + "\n").write(to: rollout, atomically: true, encoding: .utf8)
+
+        let report = try CodexUsageScanner(environment: ["HOME": home.path])
+            .loadReport(forceRefresh: true, now: Date(), persistCache: false)
+        try expect(report.rows.count == 1, "only model-attributed usage should be reported")
+        guard let row = report.rows.first else {
+            throw TestError.failure("expected Codex usage row")
+        }
+        try expect(row.model == "gpt-5.6-sol", "usage should retain the verified turn model")
+        try expect(row.input == 200, "non-cached input should exclude inherited history")
+        try expect(row.cachedInput == 800, "cached input should exclude inherited history")
+        try expect(row.output == 100, "output should exclude inherited history")
+        try expect(!report.rows.contains { $0.model == "gpt-5" }, "unknown history must not be mislabeled as GPT-5")
     }
 
     private static func testRemotePricingCatalog() throws {

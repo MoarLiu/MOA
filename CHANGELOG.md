@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.8 - 2026-07-12
+
+- Fixed Codex usage statistics so inherited subagent history is not counted again.
+- Stopped labeling model-less Codex usage events as GPT-5, and automatically rebuilt the local usage cache with the corrected model attribution.
+
 ## 1.1.7 - 2026-07-12
 
 - Made Codex and Claude Desktop profile changes transactional so live configuration, account files, and selected state roll back together after a failed write.
